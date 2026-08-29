@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.4.0
+# Version: 0.4.1
 # Last-Updated: 2026-08-29
-# Update #: 1
+# Update #: 3
 
 * Overview
 
@@ -73,7 +73,9 @@ Review the complete plan.  The first DNS mutation is explicit:
 
 * Requirements
 
-- A POSIX =/bin/sh=, =curl=, =jq=, =stat=, =mktemp=, and ordinary POSIX tools.
+- A POSIX =/bin/sh=, =curl=, =stat=, =mktemp=, and ordinary POSIX tools.
+- jq 1.6 or newer.  The declaration validator checks for the required =IN=
+  filter and reports the version floor before reading a declaration.
 - macOS, Linux, or SmartOS for direct execution.  Key-file mode inspection is
   selected for Darwin, Linux, and SunOS.
 - Network access to =https://api.bunny.net= for commands other than =help=,
@@ -144,6 +146,11 @@ Changing an owned record's name or type uses delete-then-create because Bunny's
 record update endpoint does not reliably apply identity changes.  The backup
 is the recovery reference for that non-atomic replacement.
 
+=apply= and =prune= are single-writer operations.  Do not edit the same Bunny
+zone through another process, API client, or dashboard while either command is
+running.  The post-apply fetch detects a divergent declared state but cannot
+lock the zone or prevent another writer from racing an individual API request.
+
 For a declaration migrated from the original Matrix repository, add:
 
 #+begin_src json
@@ -157,7 +164,19 @@ That value preserves the existing =managed-by:matrix-server; key=...= comments.
 The API key file must be a regular, non-symbolic file with mode 0400 or 0600.
 It must contain exactly one line of printable ASCII with no leading or trailing
 space.  The key is copied into a mode-0600 temporary header file so it does not
-appear in =curl='s process arguments; temporary request data is removed at exit.
+appear in =curl='s process arguments.  Temporary request data is removed on
+normal exit and on handled HUP, INT, or TERM signals.  SIGKILL cannot run shell
+cleanup; after such a termination, a mode-0700 =dns_bunny.*= directory with
+mode-0600 request files may remain under =TMPDIR=.
+
+On the SCS workstation, the existing Bunny API key can be found at
+=~/.secrets/bunnynet-api-key=.  The file was verified as a regular,
+non-symbolic mode-0600 file on 2026-08-29.  JSON does not expand =~=, so an SCS
+project declaration must use the full path:
+
+#+begin_src json
+"key_file": "/Users/scs/.secrets/bunnynet-api-key"
+#+end_src
 
 Do not commit the key.  Keep it on the trusted operator machine and do not copy
 it to a public application server.
@@ -229,9 +248,10 @@ gmake self-check
 #+end_src
 
 The offline suite uses a stateful fake Bunny API.  It exercises validation,
-planning, adoption, creation, identity replacement, verification,
-owner-isolated pruning, protected backups, lookup failures, and
-Darwin/Linux/SunOS key-mode branches without using a real account.
+planning, fail-closed plan construction, adoption, creation, identity
+replacement, verification, owner-isolated pruning, protected backups, lookup
+failures, the jq feature floor, and Darwin/Linux/SunOS key-mode branches
+without using a real account.
 
 The project also checks staged install and uninstall behavior during release
 verification.  A live Bunny API call is intentionally not part of the offline

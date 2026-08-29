@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.4.0
+# Version: 0.4.1
 # Last-Updated: 2026-08-29
-# Update #: 0
+# Update #: 1
 
 set -u
 LC_ALL=C
@@ -74,7 +74,7 @@ expect_output() {
 
 file_mode() {
   case $(uname -s) in
-    Darwin) stat -f '%Lp' "$1" ;;
+    Darwin) /usr/bin/stat -f '%Lp' "$1" ;;
     Linux|SunOS) stat -c '%a' "$1" ;;
     *) return 1 ;;
   esac
@@ -129,7 +129,7 @@ else
 fi
 
 expect_status 0 'the staged executable runs independently' "$db_installed_program" version
-expect_output 'dns_bunny.sh 0.4.0' 'the staged executable reports the release version'
+expect_output 'dns_bunny.sh 0.4.1' 'the staged executable reports the release version'
 
 expect_status 0 'staged uninstall succeeds with matching overrides' \
   gmake -C "$db_project_dir" uninstall DESTDIR="$db_stage_dir" \

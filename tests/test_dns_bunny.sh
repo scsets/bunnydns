@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.4.0
+# Version: 0.4.1
 # Last-Updated: 2026-08-29
-# Update #: 0
+# Update #: 1
 
 set -u
 LC_ALL=C
@@ -86,7 +86,7 @@ expect_jq() {
 
 file_mode() {
   case $(uname -s) in
-    Darwin) stat -f '%Lp' "$1" ;;
+    Darwin) /usr/bin/stat -f '%Lp' "$1" ;;
     Linux|SunOS) stat -c '%a' "$1" ;;
     *) return 1 ;;
   esac
@@ -95,17 +95,23 @@ file_mode() {
 db_state_dir=$db_test_root/state
 db_mock_bin=$db_test_root/mock-bin
 db_mock_os_bin=$db_test_root/mock-os-bin
+db_mock_jq_bin=$db_test_root/mock-jq-bin
+db_bad_stat_bin=$db_test_root/bad-stat-bin
 db_key_file=$db_test_root/secrets/api-key
 db_backup_dir=$db_test_root/backups
 db_replace_backup_dir=$db_test_root/replace-backups
 db_prune_backup_dir=$db_test_root/prune-backups
 db_config_file=$db_test_root/records.json
+db_real_jq=$(command -v jq) || exit 1
 
-mkdir -p "$db_state_dir" "$db_mock_bin" "$db_mock_os_bin" "$(dirname "$db_key_file")" || exit 1
+mkdir -p "$db_state_dir" "$db_mock_bin" "$db_mock_os_bin" "$db_mock_jq_bin" \
+  "$db_bad_stat_bin" "$(dirname "$db_key_file")" || exit 1
 ln -s "$db_script_dir/mock_curl.sh" "$db_mock_bin/curl" || exit 1
 ln -s "$db_script_dir/mock_curl.sh" "$db_mock_os_bin/curl" || exit 1
 ln -s "$db_script_dir/mock_uname.sh" "$db_mock_os_bin/uname" || exit 1
 ln -s "$db_script_dir/mock_stat.sh" "$db_mock_os_bin/stat" || exit 1
+ln -s "$db_script_dir/mock_jq.sh" "$db_mock_jq_bin/jq" || exit 1
+ln -s "$db_script_dir/mock_bad_stat.sh" "$db_bad_stat_bin/stat" || exit 1
 printf '%s\n' 'test-bunny-api-key' >"$db_key_file" || exit 1
 chmod 600 "$db_key_file" || exit 1
 
@@ -175,13 +181,18 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.4.0' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.4.1' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.4.0' 'version command is exact'
+expect_output 'dns_bunny.sh 0.4.1' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
+
+expect_status 1 'jq without IN support is rejected with the documented version floor' env \
+  MOCK_JQ_REAL="$db_real_jq" MOCK_JQ_NO_IN=1 PATH="$db_mock_jq_bin:$PATH" \
+  "$db_program" validate "$db_config_file"
+expect_output 'jq 1.6 or newer is required' 'old jq failure explains the required release'
 
 db_missing_owner=$db_test_root/missing-owner.json
 jq 'del(.owner)' "$db_config_file" >"$db_missing_owner" || exit 1
@@ -199,12 +210,27 @@ expect_status 1 'an over-permissive API key is rejected' env \
 expect_output 'must have mode 0400 or 0600' 'key-mode failure explains the accepted modes'
 chmod 600 "$db_key_file" || exit 1
 
+if [ "$(uname -s)" = Darwin ]; then
+  expect_status 0 'Darwin ignores an incompatible stat placed first on PATH' env \
+    MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_bad_stat_bin:$db_mock_bin:$PATH" \
+    "$db_program" check "$db_config_file"
+  expect_output 'Key file permissions: 600' 'Darwin mode inspection uses BSD stat'
+fi
+
 expect_status 0 'plan succeeds against the offline Bunny API' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" plan "$db_config_file"
 expect_output 'UPDATE web-origin:' 'plan adopts an exact unmanaged record'
 expect_output 'OK site-verification:' 'plan recognizes a matching owned record'
 expect_output 'CREATE api-origin:' 'plan creates an absent record'
+
+db_jq_failure_state=$db_test_root/jq-action-count
+expect_status 1 'a mid-plan jq failure aborts the parent command' env \
+  MOCK_BUNNY_STATE="$db_state_dir" MOCK_JQ_REAL="$db_real_jq" \
+  MOCK_JQ_FAIL_ACTION_AT=2 MOCK_JQ_STATE="$db_jq_failure_state" \
+  PATH="$db_mock_jq_bin:$db_mock_bin:$PATH" \
+  "$db_program" plan "$db_config_file"
+expect_output 'cannot write DNS plan' 'mid-plan failure is reported instead of accepting a partial plan'
 
 expect_status 0 'apply performs and verifies the planned changes' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
@@ -301,6 +327,10 @@ expect_status 1 'CNAME exclusivity conflict stops the plan' env \
   "$db_program" plan "$db_conflict_config"
 expect_output 'CONFLICT clashing-name:' 'conflict is visible in the plan'
 expect_output 'DNS conflict(s) require review' 'conflict failure requests review'
+expect_status 1 'verify distinguishes a conflict from an ordinary mismatch' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" verify "$db_conflict_config"
+expect_output 'DNS conflict(s) prevent a clean declared state' 'clean-plan failure identifies the conflict'
 
 db_absent_config=$db_test_root/absent-zone.json
 jq '.zone = "absent.test"' "$db_config_file" >"$db_absent_config" || exit 1

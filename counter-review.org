@@ -1,0 +1,237 @@
+#+TITLE: Counter-review of review.org
+
+# Filename: counter-review.org
+# Description: Evidence-based response to the technical review of the Bunny DNS reconciler.
+# Author: SCS
+# Copyright (C) 2026, SCS, all rights reserved.
+# Created: 2026-08-29
+# Version: 0.4.1
+# Last-Updated: 2026-08-29
+# Update #: 1
+
+* Conclusion
+
+=review.org= found two real implementation defects and several worthwhile
+documentation improvements.  Its H1 Darwin =stat= finding and M1 pipeline
+finding are resolved in version 0.4.1, together with the accepted documentation
+items.  The review is also useful as a broad inventory of the reconciler's
+security and mutation safeguards.
+
+Four conclusions should not be adopted as written:
+
+- Bunny's current update-record schema does include =Type=, so L1 is not a
+  defect.
+- The N1 replacement pattern, =*[! -~]*=, is invalid shell syntax because its
+  unquoted space terminates the pattern word.  The present spelling works in
+  the shells tested with the script's forced C locale.
+- The script needs jq 1.6 or newer, not jq 1.5, because it uses uppercase
+  =IN(...)=.
+- The N3 metadata rewrite is unsupported by this repository's conventions and
+  would replace the established native-comment fields with a different scheme.
+
+No live Bunny zone was changed while preparing this response.
+
+* Disposition of findings
+
+| ID | Disposition | Response |
+|----+-------------+----------|
+| H1 | Resolved in 0.4.1 | BSD =stat= is pinned on Darwin and covered by a failing-PATH-=stat= regression. |
+| M1 | Resolved in 0.4.1 | The loop reads a checked file and every jq result used to construct the plan is checked. |
+| L1 | Reject | The current official update schema explicitly includes =Type=. |
+| L2 | Accept as documented risk | Replacement is deliberately non-atomic and already has a protected pre-change backup. |
+| L3 | Resolved in 0.4.1 documentation | README and manual state the single-writer assumption for =apply= and =prune=. |
+| L4 | Resolved in 0.4.1 | Clean-plan verification reports conflicts separately. |
+| N1 | Reject proposed fix | The replacement is a syntax error; retain the current pattern or use a tested character class. |
+| N2 | Resolved in 0.4.1 | Usage reads the program variables; tests retain an independent literal release assertion. |
+| N3 | Reject | The existing native-comment metadata is the project convention; date-only stamps are not a defect. |
+| N4 | Resolved in 0.4.1 | Documentation and a capability check require jq 1.6 or newer. |
+| N5 | Resolved in 0.4.1 documentation | README and manual describe the protected SIGKILL residual-file case. |
+| N6 | Resolved in 0.4.1 | The manual documents status 130 for handled HUP, INT, or TERM. |
+
+* Accepted implementation defects
+
+** H1 - Darwin must not select GNU =stat= through =PATH=
+
+The finding reproduces on this macOS host.  When Homebrew's GNU coreutils
+=gnubin= directory precedes =/usr/bin=, this command:
+
+#+begin_src sh
+stat -f '%Lp' protected-file
+#+end_src
+
+selects GNU =stat= 9.11, returns status 1, and interprets =%Lp= as a file name.
+The installed BSD implementation at =/usr/bin/stat= returns the intended mode.
+
+The version 0.4.1 Darwin branch therefore calls:
+
+#+begin_src sh
+/usr/bin/stat -f '%Lp' "$1"
+#+end_src
+
+The real-mode helpers in both test programs use the same fixed path.  On
+Darwin, the suite additionally puts an incompatible fake =stat= first on
+=PATH= and proves that key-mode inspection still succeeds.  =prepare_online=
+now validates the command actually used on each operating system rather than
+requiring an unrelated =stat= found through =PATH=.
+
+** M1 - A planning failure can be swallowed by the pipeline subshell
+
+The reproduction is valid under macOS =/bin/sh=: =die= exits the loop's
+subshell, the pipeline returns 1, and the parent shell continues because
+=build_plan= does not inspect that status.  A partial plan can consequently be
+printed or applied.
+
+Version 0.4.1 uses the file-fed loop structural fix:
+
+#+begin_src sh
+jq -c '.[]' "$DESIRED_FILE" >"$DESIRED_LINES" \
+  || die "cannot prepare desired records"
+while IFS= read -r db_desired; do
+  # Build checked actions.
+done <"$DESIRED_LINES"
+#+end_src
+
+The implementation also checks each parse, count, identity, and
+canonicalization operation explicitly.  Its regression injects a jq failure
+while constructing the second action and requires the parent command to return
+nonzero instead of accepting the first action as a complete plan.
+
+* Corrections to the review
+
+** L1 - =Type= is documented for update requests
+
+The current official
+[[https://bunny.net/docs/api-reference/core/dns-zone/update-dns-record][Bunny Update DNS Record reference]]
+lists =Type= in the request-body schema and supplies the same numeric enum used
+by the script.  Generated examples may omit fields, but they do not override
+the schema.  Sending =Type= in =record_body= is therefore documented behavior,
+not an unverified extra field.
+
+Dropping it only from update bodies would also split one canonical request
+builder into method-specific variants without evidence of a benefit.  Keep the
+current field unless a live API test demonstrates contrary server behavior.
+
+** N1 - The suggested pattern is invalid shell syntax
+
+The proposed pattern:
+
+#+begin_src sh
+*[! -~]*)
+#+end_src
+
+fails syntax checking under macOS =/bin/sh= and =/bin/bash=, Homebrew Bash, and
+Homebrew ksh.  The unquoted space is tokenized before the pattern is matched.
+It must not replace the current expression.
+
+The existing =*[!\ -~]*= expression accepted printable input and rejected a
+control byte in all four tested shells with =LC_ALL=C=.  If the spelling is
+still considered too subtle, a clearer tested alternative under the already
+mandatory C locale is:
+
+#+begin_src sh
+*[![:print:]]*)
+#+end_src
+
+The separate leading/trailing-space check should remain.
+
+** N3 - The metadata recommendation conflicts with project practice
+
+The repository uses an ordered native-comment metadata block with =Filename=,
+=Description=, =Author=, =Copyright=, =Created=, =Version=,
+=Last-Updated=, and =Update #=.  =README.org= follows that convention.  Org
+keywords are appropriate for document properties such as =#+TITLE:=, but there
+is no repository requirement to convert the maintenance block to the review's
+alternative =#+FILENAME:= scheme or to add artificial midnight timestamps.
+
+Consistency work should preserve the established fields and increment their
+update counter only when a file is materially changed.
+
+** N4 - The jq floor is 1.6
+
+The script's validation filter calls uppercase =IN(...)=.  The
+[[https://jqlang.org/manual/v1.6/][jq 1.6 manual]] documents =IN(s)= and
+=IN(source; s)=; the [[https://jqlang.org/manual/v1.5/][jq 1.5 manual]] does
+not.  Other used features appearing in 1.5 do not lower that requirement.
+
+The README and manual should say =jq 1.6 or newer=.  A small capability check
+such as evaluating =IN= is more reliable than parsing a vendor-specific version
+string if runtime enforcement is desired.
+
+* Useful lower-priority observations
+
+** Single-writer assumption
+
+The tool detects divergence after mutation but has no API transaction or lock
+covering other Bunny clients.  README and manual now advise operators not to
+run another DNS editor against the same records during =apply= or =prune=.
+This is a constraint, not evidence that post-apply verification is broken.
+
+** Replacement recovery
+
+The delete-then-create gap is real and already disclosed.  Adding a short
+=REPLACE= warning to plan output would put the recovery risk at the decision
+point, but it is not a release blocker because the backup and manual already
+describe it.
+
+** Verification wording
+
+="N DNS record(s) do not match the declared state"= was broadly true for all
+non-=ok= actions.  Version 0.4.1 reports conflicts separately, making a
+post-apply race or ownership collision easier to diagnose.
+
+** Version duplication
+
+=usage= now prints =$PROGRAM= and =$VERSION= rather than repeating the release
+literal.  Tests continue to assert 0.4.1 independently so they can catch an
+accidental version change.
+
+** Forced termination and exit status
+
+The review correctly notes that SIGKILL cannot trigger shell cleanup.  The
+remaining directory is mode 0700 and key-bearing files are mode 0600, which
+limits exposure but does not erase the credential.  README and manual now say
+cleanup occurs on normal exit and handled signals, with the SIGKILL exception.
+
+The manual now includes status 130 for HUP, INT, and TERM, matching the current
+traps.  Whether those three signals should eventually use distinct conventional
+statuses is a separate compatibility decision.
+
+* What the review usefully confirmed
+
+The positive audit remains valuable.  In particular, it records that:
+
+- credentials are kept out of command arguments and protected on disk;
+- ownership comments isolate independently managed project records;
+- mutation plans stop on ownership and CNAME conflicts;
+- =apply= and =prune= create protected backups before changes;
+- unrelated and differently owned records are preserved;
+- the tool re-fetches and verifies declared state after =apply=;
+- replacement and pruning behavior are covered by the offline fake API; and
+- live Linux, SmartOS, and special-record round trips remain release evidence
+  gaps rather than silently claimed coverage.
+
+Those confirmations make =review.org= worth retaining alongside this response,
+provided readers use the corrected dispositions above.
+
+* Resolution in version 0.4.1
+
+1. H1 is fixed in the program and real-mode test helpers, with a Darwin
+   regression that places an incompatible =stat= first on =PATH=.
+2. M1 is fixed with a checked desired-record stream, guarded jq operations, and
+   a forced mid-plan failure regression.
+3. README and manual document jq 1.6+, the single-writer assumption, SIGKILL
+   residue, and exit status 130.  The program checks the jq capability.
+4. Clean-plan conflict wording and usage-version duplication are resolved.
+5. =Type=, the established metadata form, and the working API-key pattern remain
+   unchanged because the review did not establish defects in them.
+
+* Verification basis
+
+- Source inspection of the reviewed =dns_bunny.sh= 0.4.0 and resolved 0.4.1,
+  their tests, README, and manual.
+- Local reproduction with BSD =/usr/bin/stat= and GNU coreutils =stat= 9.11.
+- Syntax and behavior checks with macOS =/bin/sh= and =/bin/bash=, Homebrew
+  Bash, and Homebrew ksh under =LC_ALL=C=.
+- Official Bunny update-record schema and official jq 1.5/1.6 manuals, as
+  linked above.
+- No live Bunny API request and no Linux or SmartOS host execution.

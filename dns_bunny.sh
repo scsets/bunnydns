@@ -5,16 +5,16 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.4.0
+# Version: 0.4.1
 # Last-Updated: 2026-08-29 Sat 00:00
-# Update #: 6
+# Update #: 7
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.4.0
+VERSION=0.4.1
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
@@ -29,12 +29,13 @@ MANAGED_PREFIX=
 KEY_FILE=
 BACKUP_DIR=
 DESIRED_FILE=
+DESIRED_LINES=
 ZONE_FILE=
 PLAN_FILE=
 
 usage() {
+  printf '%s %s\n' "$PROGRAM" "$VERSION"
   cat <<'EOF'
-dns_bunny.sh 0.4.0
 Reconcile project-owned records in an existing Bunny DNS zone.
 
 Usage:
@@ -86,6 +87,7 @@ make_work_dir() {
   CURL_CONFIG=$WORK_DIR/curl.conf
   HEADER_FILE=$WORK_DIR/headers
   DESIRED_FILE=$WORK_DIR/desired.json
+  DESIRED_LINES=$WORK_DIR/desired.ndjson
   ZONE_FILE=$WORK_DIR/zone.json
   PLAN_FILE=$WORK_DIR/plan.ndjson
 }
@@ -94,10 +96,25 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
+require_jq() {
+  require_command jq
+  # Uppercase IN is the newest jq feature used by the declaration filters.
+  jq -n 'IN(1)' >/dev/null 2>&1 || die "jq 1.6 or newer is required"
+}
+
+require_file_mode_tool() {
+  case $(uname -s) in
+    # macOS always provides BSD stat here, even when PATH selects GNU stat.
+    Darwin) [ -x /usr/bin/stat ] || die "required command not found: /usr/bin/stat" ;;
+    Linux|SunOS) require_command stat ;;
+    *) die "cannot inspect key permissions on this operating system" ;;
+  esac
+}
+
 validate_config() {
   CONFIG_FILE=$1
   [ -f "$CONFIG_FILE" ] || die "record file not found: $CONFIG_FILE"
-  require_command jq
+  require_jq
 
   jq -e '
     def valid_type:
@@ -165,7 +182,7 @@ normalize_config() {
 
 file_mode() {
   case $(uname -s) in
-    Darwin) stat -f '%Lp' "$1" ;;
+    Darwin) /usr/bin/stat -f '%Lp' "$1" ;;
     Linux|SunOS) stat -c '%a' "$1" ;;
     *) die "cannot inspect key permissions on this operating system" ;;
   esac
@@ -266,7 +283,7 @@ fetch_zone() {
 prepare_online() {
   validate_config "$1"
   require_command curl
-  require_command stat
+  require_file_mode_tool
   make_work_dir
   load_settings
   normalize_config
@@ -335,15 +352,23 @@ canonical_desired() {
 build_plan() {
   : >"$PLAN_FILE" || die "cannot initialize DNS plan"
 
-  jq -c '.[]' "$DESIRED_FILE" | while IFS= read -r db_desired; do
-    db_comment=$(printf '%s\n' "$db_desired" | jq -r '.Comment')
-    db_type=$(printf '%s\n' "$db_desired" | jq -r '.Type')
-    db_name=$(printf '%s\n' "$db_desired" | jq -r '.Name')
-    db_value=$(printf '%s\n' "$db_desired" | jq -r '.Value')
-    db_allow_multiple=$(printf '%s\n' "$db_desired" | jq -r '.AllowMultiple')
+  # Redirection keeps the loop in this shell, so die cannot be lost in a pipeline subshell.
+  jq -c '.[]' "$DESIRED_FILE" >"$DESIRED_LINES" || die "cannot prepare desired records"
+  while IFS= read -r db_desired; do
+    db_comment=$(printf '%s\n' "$db_desired" | jq -r '.Comment') \
+      || die "cannot read desired record ownership"
+    db_type=$(printf '%s\n' "$db_desired" | jq -r '.Type') \
+      || die "cannot read desired record type"
+    db_name=$(printf '%s\n' "$db_desired" | jq -r '.Name') \
+      || die "cannot read desired record name"
+    db_value=$(printf '%s\n' "$db_desired" | jq -r '.Value') \
+      || die "cannot read desired record value"
+    db_allow_multiple=$(printf '%s\n' "$db_desired" | jq -r '.AllowMultiple') \
+      || die "cannot read desired record multiplicity policy"
 
     db_owned_count=$(jq --arg comment "$db_comment" \
-      '[.Records[]? | select((.Comment // "") == $comment)] | length' "$ZONE_FILE")
+      '[.Records[]? | select((.Comment // "") == $comment)] | length' "$ZONE_FILE") \
+      || die "cannot count owned Bunny records"
 
     if [ "$db_owned_count" -gt 1 ]; then
       append_action conflict '' "$db_desired" 'multiple Bunny records carry this project ownership key'
@@ -352,16 +377,21 @@ build_plan() {
 
     if [ "$db_owned_count" -eq 1 ]; then
       db_record_id=$(jq -r --arg comment "$db_comment" \
-        '.Records[] | select((.Comment // "") == $comment) | .Id' "$ZONE_FILE")
+        '.Records[] | select((.Comment // "") == $comment) | .Id' "$ZONE_FILE") \
+        || die "cannot read the owned Bunny record identifier"
       db_current_identity=$(jq -c --argjson id "$db_record_id" \
-        '.Records[] | select(.Id == $id) | {Type, Name: (.Name // "")}' "$ZONE_FILE")
-      db_wanted_identity=$(printf '%s\n' "$db_desired" | jq -c '{Type, Name}')
+        '.Records[] | select(.Id == $id) | {Type, Name: (.Name // "")}' "$ZONE_FILE") \
+        || die "cannot read the owned Bunny record identity"
+      db_wanted_identity=$(printf '%s\n' "$db_desired" | jq -c '{Type, Name}') \
+        || die "cannot read the desired Bunny record identity"
       if [ "$db_current_identity" != "$db_wanted_identity" ]; then
         append_action replace "$db_record_id" "$db_desired" 'managed record name or type differs'
         continue
       fi
-      db_current=$(canonical_current "$db_record_id")
-      db_wanted=$(canonical_desired "$db_desired")
+      db_current=$(canonical_current "$db_record_id") \
+        || die "cannot normalize the current Bunny record"
+      db_wanted=$(canonical_desired "$db_desired") \
+        || die "cannot normalize the desired Bunny record"
       if [ "$db_current" = "$db_wanted" ]; then
         append_action ok "$db_record_id" "$db_desired" 'managed record already matches'
       else
@@ -386,7 +416,7 @@ build_plan() {
         };
       ($desired | semantic) as $wanted
       | [.Records[]? | select((. | semantic) == $wanted)] | length
-    ' "$ZONE_FILE")
+    ' "$ZONE_FILE") || die "cannot count matching unmanaged Bunny records"
 
     if [ "$db_semantic_count" -eq 1 ]; then
       db_record_id=$(jq -r --argjson desired "$db_desired" '
@@ -405,7 +435,7 @@ build_plan() {
           };
         ($desired | semantic) as $wanted
         | .Records[] | select((. | semantic) == $wanted) | .Id
-      ' "$ZONE_FILE")
+      ' "$ZONE_FILE") || die "cannot read the matching unmanaged Bunny record identifier"
       append_action update "$db_record_id" "$db_desired" 'adopt exact existing record and apply project metadata'
       continue
     fi
@@ -417,7 +447,7 @@ build_plan() {
 
     db_cname_conflict=$(jq --argjson type "$db_type" --arg name "$db_name" '[
       .Records[]? | select((.Name // "") == $name and (.Type == 2 or $type == 2))
-    ] | length' "$ZONE_FILE")
+    ] | length' "$ZONE_FILE") || die "cannot inspect CNAME exclusivity"
     if [ "$db_cname_conflict" -gt 0 ]; then
       append_action conflict '' "$db_desired" 'CNAME exclusivity would be violated'
       continue
@@ -425,14 +455,14 @@ build_plan() {
 
     db_same_set=$(jq --argjson type "$db_type" --arg name "$db_name" '[
       .Records[]? | select(.Type == $type and (.Name // "") == $name)
-    ] | length' "$ZONE_FILE")
+    ] | length' "$ZONE_FILE") || die "cannot inspect the unmanaged Bunny record set"
     if [ "$db_same_set" -gt 0 ] && [ "$db_allow_multiple" != true ]; then
       append_action conflict '' "$db_desired" "an unmanaged record set already exists for type $db_type name $db_name"
       continue
     fi
 
     append_action create '' "$db_desired" "record is absent ($db_value)"
-  done
+  done <"$DESIRED_LINES"
 }
 
 print_plan() {
@@ -498,7 +528,11 @@ apply_actions() {
 }
 
 verify_plan_is_clean() {
-  db_not_ok=$(jq -s '[.[] | select(.action != "ok")] | length' "$PLAN_FILE")
+  db_conflicts=$(jq -s '[.[] | select(.action == "conflict")] | length' "$PLAN_FILE") \
+    || die "cannot inspect DNS plan conflicts"
+  db_not_ok=$(jq -s '[.[] | select(.action != "ok")] | length' "$PLAN_FILE") \
+    || die "cannot inspect DNS plan results"
+  [ "$db_conflicts" -eq 0 ] || die "$db_conflicts DNS conflict(s) prevent a clean declared state"
   [ "$db_not_ok" -eq 0 ] || die "$db_not_ok DNS record(s) do not match the declared state"
 }
 
@@ -536,20 +570,20 @@ cmd_list() {
 cmd_plan() {
   prepare_online "$1"
   build_plan
-  print_plan
-  db_conflicts=$(count_actions conflict)
+  print_plan || die "cannot print DNS plan"
+  db_conflicts=$(count_actions conflict) || die "cannot count DNS plan conflicts"
   [ "$db_conflicts" -eq 0 ] || die "$db_conflicts DNS conflict(s) require review"
 }
 
 cmd_apply() {
   prepare_online "$1"
   build_plan
-  print_plan
-  db_conflicts=$(count_actions conflict)
+  print_plan || die "cannot print DNS plan"
+  db_conflicts=$(count_actions conflict) || die "cannot count DNS plan conflicts"
   [ "$db_conflicts" -eq 0 ] || die "$db_conflicts DNS conflict(s) require review"
-  db_creates=$(count_actions create)
-  db_updates=$(count_actions update)
-  db_replaces=$(count_actions replace)
+  db_creates=$(count_actions create) || die "cannot count DNS record creations"
+  db_updates=$(count_actions update) || die "cannot count DNS record updates"
+  db_replaces=$(count_actions replace) || die "cannot count DNS record replacements"
   db_mutations=$((db_creates + db_updates + db_replaces))
 
   if [ "$db_mutations" -eq 0 ]; then
@@ -561,7 +595,7 @@ cmd_apply() {
   apply_actions
   fetch_zone
   build_plan
-  print_plan
+  print_plan || die "cannot print verified DNS plan"
   verify_plan_is_clean
   say "Applied and verified $db_mutations DNS change(s)."
 }
@@ -569,7 +603,7 @@ cmd_apply() {
 cmd_verify() {
   prepare_online "$1"
   build_plan
-  print_plan
+  print_plan || die "cannot print DNS plan"
   verify_plan_is_clean
   say 'All declared DNS records match Bunny.'
 }

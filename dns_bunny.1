@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.4.0
+.\" Version: 0.4.1
 .\" Last-Updated: 2026-08-29 Sat 00:00
-.\" Update #: 6
-.TH DNS_BUNNY 1 "2026-08-29" "dns_bunny 0.4.0" "SCS Commands"
+.\" Update #: 7
+.TH DNS_BUNNY 1 "2026-08-29" "dns_bunny 0.4.1" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- reconcile project-owned records in an existing Bunny DNS zone
 .SH SYNOPSIS
@@ -159,6 +159,14 @@ change its DNS answer.
 A differing unmanaged record set causes a conflict unless the declaration
 explicitly permits multiple records.
 CNAME exclusivity is always enforced.
+.PP
+.B apply
+and
+.B prune
+assume that no other process, API client, or dashboard edits the same zone
+while the command runs.
+Post-apply verification detects a divergent declared state but cannot lock the
+zone or prevent a concurrent request.
 .SH API KEY
 The key is a Bunny account API credential.
 Keep it on the trusted operator workstation and out of version control.
@@ -168,7 +176,10 @@ The key file must be a regular, non-symbolic file with mode 0400 or 0600 and
 exactly one line of printable ASCII without leading or trailing spaces.
 The program places the AccessKey request header in a temporary mode-0600 file
 so the key does not appear in curl's process arguments.
-Temporary request files are removed at exit.
+Temporary request files are removed on normal exit and handled HUP, INT, or
+TERM signals.
+SIGKILL cannot run the cleanup trap; a protected mode-0700 temporary directory
+and mode-0600 request files may remain under TMPDIR after such a termination.
 .SH BACKUPS
 Before
 .B apply
@@ -184,7 +195,8 @@ An existing same-second backup is never overwritten.
 .SH PORTABILITY
 The program uses POSIX shell syntax and supports key-file mode checks on macOS,
 Linux, and SmartOS.
-It requires curl, jq, stat, mktemp, and ordinary POSIX utilities.
+It requires curl, jq 1.6 or newer, stat, mktemp, and ordinary POSIX utilities.
+The validator checks for the jq IN filter before reading a declaration.
 .PP
 The supplied GNU Makefile installs to
 .I $HOME/bin
@@ -209,6 +221,9 @@ The command completed successfully.
 .B 1
 Usage, validation, dependency, permission, network, API, conflict, or
 verification failure.
+.TP
+.B 130
+The command received HUP, INT, or TERM and ran its signal cleanup handler.
 .SH FILES
 .TP
 .I records.example.json
