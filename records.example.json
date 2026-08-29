@@ -1,0 +1,22 @@
+{
+  "owner": "example-project",
+  "zone": "example.com",
+  "key_file": "/absolute/path/to/bunny-api-key",
+  "backup_dir": "/absolute/path/to/dns-backups",
+  "records": [
+    {
+      "key": "web-origin",
+      "type": "A",
+      "name": "www",
+      "value": "192.0.2.10",
+      "ttl": 300
+    },
+    {
+      "key": "site-verification",
+      "type": "TXT",
+      "name": "@",
+      "value": "service-verification=replace-me",
+      "ttl": 300
+    }
+  ]
+}

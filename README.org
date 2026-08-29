@@ -1,0 +1,246 @@
+#+TITLE: Bunny DNS Reconciler
+
+# Filename: README.org
+# Description: Operator guide for the standalone Bunny DNS reconciler.
+# Author: SCS
+# Copyright (C) 2026, SCS, all rights reserved.
+# Created: 2026-08-29
+# Version: 0.4.0
+# Last-Updated: 2026-08-29
+# Update #: 1
+
+* Overview
+
+** Problem
+
+A Bunny DNS zone may contain records owned by several projects and records
+maintained by hand.  A deployment needs to change its own addresses and text
+records without overwriting an unrelated mail, verification, or service
+record in the same zone.  Raw API calls do not preserve that boundary by
+themselves.
+
+** Solution
+
+=dns_bunny.sh= owns a small declaration of desired records.  Each declaration
+names an =owner= and gives every record a durable =key=.  The tool stores those
+two values in the Bunny record comment, reconciles only matching records, and
+preserves every record owned by another project or by no project.
+
+The tool never creates or deletes a DNS zone, changes registrar delegation, or
+manages DNSSEC.  It does not read credentials from the declaration or from
+command-line arguments.
+
+** How it works
+
+1. The tool validates the declaration and normalizes record types and optional
+   fields into Bunny's API shape.
+2. It reads a protected one-line API key file and locates exactly one existing
+   zone by its domain name.
+3. It compares each desired record with the current zone using the ownership
+   comment =managed-by:OWNER; key=KEY=.
+4. It reports safe creates, updates, replacements, exact matches, or conflicts.
+5. On =apply=, it writes a protected snapshot, performs only the planned
+   changes, fetches the zone again, and requires a clean plan.
+6. On explicit =prune=, it deletes obsolete records for this declaration's
+   owner only.  Other owners and unmanaged records remain untouched.
+
+** Quickstart
+
+First run the non-mutating checks:
+
+#+begin_src sh
+./dns_bunny.sh
+./dns_bunny.sh validate records.example.json
+gmake self-check
+#+end_src
+
+Then create a project declaration and its protected key:
+
+#+begin_src sh
+cp records.example.json records.json
+# Edit owner, zone, paths, and records before continuing.
+./dns_bunny.sh init-key /absolute/path/to/bunny-api-key
+./dns_bunny.sh check records.json
+./dns_bunny.sh plan records.json
+#+end_src
+
+Review the complete plan.  The first DNS mutation is explicit:
+
+#+begin_src sh
+./dns_bunny.sh apply records.json
+./dns_bunny.sh verify records.json
+#+end_src
+
+* Requirements
+
+- A POSIX =/bin/sh=, =curl=, =jq=, =stat=, =mktemp=, and ordinary POSIX tools.
+- macOS, Linux, or SmartOS for direct execution.  Key-file mode inspection is
+  selected for Darwin, Linux, and SunOS.
+- Network access to =https://api.bunny.net= for commands other than =help=,
+  =version=, and =validate=.
+- GNU Make for project checks and installation.  Invoke =gmake= on SmartOS.
+- Optional =shellcheck= and either =mandoc= or =nroff= for fuller local checks.
+
+* Record declaration
+
+=records.example.json= is the copyable schema example.  Its top-level fields
+are:
+
+- =owner=: a lowercase declaration namespace, unique among independently
+  pruned declarations sharing a zone.  Letters, digits, dots, underscores, and
+  hyphens are accepted.
+- =zone=: the existing Bunny DNS zone name.
+- =key_file=: an absolute path to a protected, one-line Bunny account API key.
+- =backup_dir=: an absolute path for protected pre-change zone snapshots.
+- =records=: a non-empty list of desired records.
+
+Every record requires a unique lowercase =key=, a =type=, a zone-relative
+=name=, and a non-empty =value=.  Use =@= or an empty string for the zone apex.
+Optional fields are =ttl=, =priority=, =weight=, =port=, =flags=, =tag=,
+=disabled=, and =allow_multiple=.  TTL defaults to 300 seconds and numeric
+routing fields default to zero.
+
+Supported standard record types are =A=, =AAAA=, =CNAME=, =TXT=, =MX=, =SRV=,
+=CAA=, =PTR=, =NS=, =SVCB=, =HTTPS=, and =TLSA=.  Bunny's Redirect, Flatten,
+PullZone, and Script records require product-specific fields and are
+deliberately outside this declaration format.
+
+Set =allow_multiple= to =true= only when a new value should join an existing
+unmanaged record set with the same name and type.  It never bypasses CNAME
+exclusivity.
+
+* Commands
+
+- =validate=: check the local JSON without reading the key or using the network.
+- =check=: verify dependencies, key protection, API access, owner, and exact
+  zone lookup.
+- =list=: show current public record values and routing fields.
+- =plan=: show =OK=, =CREATE=, =UPDATE=, =REPLACE=, or =CONFLICT= for every
+  declared record.
+- =apply=: back up the zone, apply a conflict-free plan, and verify the result.
+- =verify=: require every declared record to match without changing anything.
+- =prune=: after verification, delete only obsolete records for this owner.
+- =init-key=: securely prompt for a key and create a new mode-0600 file.
+
+With no arguments, the program prints its version and usage, exits
+successfully, and has no side effects.
+
+* Ownership and project isolation
+
+The ownership comment is the durable identity:
+
+#+begin_example
+managed-by:example-project; key=web-origin
+#+end_example
+
+Choose one stable =owner= per independently pruned declaration.  Reusing an
+owner in two declarations would let either declaration prune records omitted
+from itself.  Changing an owner makes the old records look unmanaged; it is not
+a rename operation.  Duplicate ownership comments and ambiguous unmanaged
+matches are conflicts, so the tool stops before mutation.
+
+An exact unmanaged record may be adopted by adding the ownership comment.
+Changing an owned record's name or type uses delete-then-create because Bunny's
+record update endpoint does not reliably apply identity changes.  The backup
+is the recovery reference for that non-atomic replacement.
+
+For a declaration migrated from the original Matrix repository, add:
+
+#+begin_src json
+"owner": "matrix-server"
+#+end_src
+
+That value preserves the existing =managed-by:matrix-server; key=...= comments.
+
+* Credentials and backups
+
+The API key file must be a regular, non-symbolic file with mode 0400 or 0600.
+It must contain exactly one line of printable ASCII with no leading or trailing
+space.  The key is copied into a mode-0600 temporary header file so it does not
+appear in =curl='s process arguments; temporary request data is removed at exit.
+
+Do not commit the key.  Keep it on the trusted operator machine and do not copy
+it to a public application server.
+
+Before any =apply= mutation or =prune= deletion, the full current zone document
+is saved below =backup_dir=.  The directory is mode 0700 and each snapshot is
+mode 0600.  A same-second filename collision is refused rather than overwritten.
+API mutations are sequential and are not rolled back automatically after a
+later request fails; use the snapshot to inspect and recover a partial run.
+
+* Installation
+
+The default target is read-only:
+
+#+begin_src sh
+gmake
+gmake show-install-paths
+#+end_src
+
+On macOS, =gmake install= places the executable in =$HOME/bin= and the manual
+page in =$HOME/share/man/man1=.  On SmartOS, installation is permitted only in
+the global zone and defaults to =/opt/custom/bin= and
+=/opt/custom/share/man/man1=.
+
+Override logical destinations with absolute paths:
+
+#+begin_src sh
+gmake install BINDIR=/usr/local/bin MANDIR=/usr/local/share/man/man1
+#+end_src
+
+Use an absolute =DESTDIR= to stage a package without writing to live locations:
+
+#+begin_src sh
+gmake install DESTDIR=/tmp/bunny-dns-stage
+gmake uninstall DESTDIR=/tmp/bunny-dns-stage
+#+end_src
+
+=uninstall= removes only =dns_bunny.sh= and =dns_bunny.1=; it preserves their
+containing directories.
+
+* Future plans and possibilities
+
+** Scoped Bunny API gateway
+
+Future gateway work should use the
+[[https://github.com/sipico/bunny-api-proxy][sipico/bunny-api-proxy Git repository]]
+as its primary reference.  The project is a long-running Go and SQLite gateway
+that issues zone-, action-, and record-type scoped local tokens.  That can be
+valuable when untrusted ACME or deployment clients must not hold a Bunny
+account key.
+
+** Why it is not bundled today
+
+It is not a replacement for declarative reconciliation, backups, conflict
+detection, or per-project ownership.  The review for this import used upstream
+commit =20f4f0504c9a324f3b5efed3b748b0ec895d7f33=.  At that revision there was
+no tagged release, and the checked-in quickstart/configuration files did not
+fully agree with the current program requirements.  This repository therefore
+talks to Bunny directly and carries no proxy runtime.  A future deployment may
+place a reviewed, pinned proxy in front as a separate service after its API
+compatibility and TLS boundary are verified.
+
+* Development and verification
+
+Run:
+
+#+begin_src sh
+gmake self-check
+#+end_src
+
+The offline suite uses a stateful fake Bunny API.  It exercises validation,
+planning, adoption, creation, identity replacement, verification,
+owner-isolated pruning, protected backups, lookup failures, and
+Darwin/Linux/SunOS key-mode branches without using a real account.
+
+The project also checks staged install and uninstall behavior during release
+verification.  A live Bunny API call is intentionally not part of the offline
+suite; run =check= and =plan= against a reviewed project declaration before the
+first real =apply=.
+
+* References
+
+- [[https://docs.bunny.net/reference/dnszonepublic_addrecord][Bunny API: Add DNS Record]]
+- [[https://docs.bunny.net/api-reference/authentication][Bunny API authentication]]
+- [[https://bunny.net/docs/dns/records.md][Bunny DNS records]]
+- =dns_bunny(1)= for the complete command reference.
