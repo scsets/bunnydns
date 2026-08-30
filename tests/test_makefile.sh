@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.5
+# Version: 0.5.6
 # Last-Updated: 2026-08-30
-# Update #: 7
+# Update #: 8
 
 set -u
 LC_ALL=C
@@ -129,7 +129,7 @@ else
 fi
 
 expect_status 0 'the staged executable runs independently' "$db_installed_program" version
-expect_output 'dns_bunny.sh 0.5.5' 'the staged executable reports the release version'
+expect_output 'dns_bunny.sh 0.5.6' 'the staged executable reports the release version'
 
 expect_status 0 'the recorded script checksum is valid' \
   gmake -C "$db_project_dir" checksum-check
@@ -157,7 +157,7 @@ chmod 700 "$db_installed_program" || exit 1
 expect_status 0 'update skips an identical installed script' \
   gmake -C "$db_project_dir" update DESTDIR="$db_stage_dir" \
   BINDIR=/opt/bunny-dns/bin MANDIR=/opt/bunny-dns/share/man/man1
-expect_output 'No update needed: dns_bunny.sh 0.5.5 is identical' \
+expect_output 'No update needed: dns_bunny.sh 0.5.6 is identical' \
   'no-op update reports the current version'
 db_checks=$((db_checks + 1))
 if [ "$(file_mode "$db_installed_program")" = 700 ]; then
@@ -167,27 +167,27 @@ else
 fi
 
 db_modified_program=$db_test_root/dns_bunny.sh.modified
-sed 's/^VERSION=0\.5\.5$/VERSION=0.5.2/' \
+sed 's/^VERSION=0\.5\.6$/VERSION=0.5.2/' \
   "$db_installed_program" >"$db_modified_program" || exit 1
 chmod 755 "$db_modified_program" || exit 1
 mv "$db_modified_program" "$db_installed_program" || exit 1
 expect_status 0 'update replaces different installed script content' \
   gmake -C "$db_project_dir" update DESTDIR="$db_stage_dir" \
   BINDIR=/opt/bunny-dns/bin MANDIR=/opt/bunny-dns/share/man/man1
-expect_output 'Updating dns_bunny.sh from version 0.5.2 to 0.5.5' \
+expect_output 'Updating dns_bunny.sh from version 0.5.2 to 0.5.6' \
   'update reports the installed and incoming versions'
 expect_output 'MD5' 'content update reports both digests'
-expect_output 'Updated dns_bunny.sh from version 0.5.2 to 0.5.5' \
+expect_output 'Updated dns_bunny.sh from version 0.5.2 to 0.5.6' \
   'update confirms the completed version transition'
 expect_status 0 'the updated executable has the incoming version' \
   "$db_installed_program" version
-expect_output 'dns_bunny.sh 0.5.5' 'content update installs the source release'
+expect_output 'dns_bunny.sh 0.5.6' 'content update installs the source release'
 
 printf '\n# simulated local content drift\n' >>"$db_installed_program" || exit 1
 expect_status 0 'MD5 detects drift even when version strings match' \
   gmake -C "$db_project_dir" update DESTDIR="$db_stage_dir" \
   BINDIR=/opt/bunny-dns/bin MANDIR=/opt/bunny-dns/share/man/man1
-expect_output 'from version 0.5.5 to 0.5.5; content differs' \
+expect_output 'from version 0.5.6 to 0.5.6; content differs' \
   'same-version content drift is still updated'
 db_checks=$((db_checks + 1))
 if cmp -s "$db_installed_program" "$db_project_dir/dns_bunny.sh"; then
@@ -212,9 +212,9 @@ fi
 expect_status 0 'update installs when no installed script exists' \
   gmake -C "$db_project_dir" update DESTDIR="$db_stage_dir" \
   BINDIR=/opt/bunny-dns/bin MANDIR=/opt/bunny-dns/share/man/man1
-expect_output 'Installing dns_bunny.sh version 0.5.5; no installed copy was found' \
+expect_output 'Installing dns_bunny.sh version 0.5.6; no installed copy was found' \
   'missing installation is reported explicitly'
-expect_output 'Installed dns_bunny.sh version 0.5.5' \
+expect_output 'Installed dns_bunny.sh version 0.5.6' \
   'first installation confirms the installed version'
 
 expect_status 0 'final staged uninstall succeeds' \

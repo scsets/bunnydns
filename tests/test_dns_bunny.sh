@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.5
+# Version: 0.5.6
 # Last-Updated: 2026-08-30
-# Update #: 7
+# Update #: 8
 
 set -u
 LC_ALL=C
@@ -182,10 +182,10 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.5.5' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.5.6' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.5.5' 'version command is exact'
+expect_output 'dns_bunny.sh 0.5.6' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -350,7 +350,17 @@ expect_status 0 'direct delete removes the exact numeric record ID' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" --api-key "$db_key_file" --backup-dir "$db_direct_backup_dir" \
   delete example.test 105
-expect_output 'Deleted DNS record id=105 from example.test.' 'direct delete reports its target'
+expect_output 'Deleted DNS record from example.test:' 'direct delete confirms the zone'
+expect_output 'id=105 A cli-renamed 192.0.2.56 ttl=60 priority=0 weight=0 port=0 flags=0 tag= disabled=true' \
+  'direct delete prints the complete public record summary last'
+db_checks=$((db_checks + 1))
+db_delete_last_line=$(printf '%s\n' "$db_command_output" | sed -n '$p')
+if [ "$db_delete_last_line" = \
+  'id=105 A cli-renamed 192.0.2.56 ttl=60 priority=0 weight=0 port=0 flags=0 tag= disabled=true' ]; then
+  record_success 'deleted record summary is the final output line'
+else
+  record_failure 'deleted record summary is not the final output line'
+fi
 expect_jq '[.Records[] | select(.Id == 105)] | length == 0' \
   "$db_state_dir/zone.json" 'direct delete removes only the selected record'
 

@@ -5,16 +5,16 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.5.5
+# Version: 0.5.6
 # Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 13
+# Update #: 14
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.5.5
+VERSION=0.5.6
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
@@ -870,13 +870,15 @@ validate_direct_record_conflicts() {
 }
 
 print_zone_records() {
-  jq -r '
+  db_selected_record=${1:-0}
+  jq -r --argjson selected "$db_selected_record" '
     def type_name: {
       "0":"A", "1":"AAAA", "2":"CNAME", "3":"TXT", "4":"MX",
       "8":"SRV", "9":"CAA", "10":"PTR", "12":"NS",
       "13":"SVCB", "14":"HTTPS", "15":"TLSA"
     }[(.Type | tostring)] // ("TYPE" + (.Type | tostring));
     .Records
+    | map(select($selected == 0 or .Id == $selected))
     | sort_by(.Name // "", .Type, .Value // "")[]
     | "id=\(.Id) \(type_name) \(if (.Name // "") == "" then "@" else .Name end) "
       + "\(.Value // "") ttl=\(.Ttl // 0) priority=\(.Priority // 0) "
@@ -1131,13 +1133,17 @@ cmd_delete() {
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot locate the Bunny DNS record'
   [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
+  db_deleted_record=$(print_zone_records "$db_record_id") \
+    || die 'cannot format the DNS record selected for deletion'
+  [ -n "$db_deleted_record" ] || die 'cannot preserve the DNS record selected for deletion'
   backup_zone
   api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
   fetch_zone
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot verify the DNS record deletion'
   [ "$db_record_count" -eq 0 ] || die "Bunny DNS record $db_record_id still exists after deletion"
-  say "Deleted DNS record id=$db_record_id from $ZONE."
+  say "Deleted DNS record from $ZONE:"
+  say "$db_deleted_record"
 }
 
 cmd_plan() {

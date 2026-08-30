@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.5.5
+.\" Version: 0.5.6
 .\" Last-Updated: 2026-08-30 Sun 00:00
-.\" Update #: 13
-.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.5" "SCS Commands"
+.\" Update #: 14
+.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.6" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .SH SYNOPSIS
@@ -139,6 +139,8 @@ ordinary updates and replacements.
 .BI delete " zone record-id"
 Write a protected snapshot, delete exactly the numeric record ID, fetch the
 zone again, and verify its absence.
+The final output prints the deleted record's public list summary, including its
+type, name, value, TTL, routing fields, and disabled state but not its comment.
 .TP
 .BI plan " records.json"
 Print one OK, CREATE, UPDATE, REPLACE, or CONFLICT action for every declared

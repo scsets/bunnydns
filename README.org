@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.5
+# Version: 0.5.6
 # Last-Updated: 2026-08-30
-# Update #: 9
+# Update #: 10
 
 * Overview
 
@@ -183,6 +183,11 @@ advanced fields.
 intentional: a name and type are not unique because DNS record sets commonly
 contain several values.  A name or type change uses a backed-up
 delete-then-create replacement and may receive a new ID.
+
+After =delete= fetches the zone and confirms that the ID is absent, its final
+output reproduces the deleted record's public =list= summary.  The operator can
+therefore see the exact type, name, value, TTL, routing fields, and disabled
+state that were removed without exposing its ownership comment.
 
 An update also preserves writable Bunny fields that the direct CLI does not
 configure, including acceleration, monitoring, smart-routing, geolocation,
