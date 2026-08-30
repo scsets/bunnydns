@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.2
+# Version: 0.5.5
 # Last-Updated: 2026-08-30
-# Update #: 3
+# Update #: 4
 
 set -u
 
@@ -88,8 +88,13 @@ case "$db_url" in
     fi
     db_record_id=$(jq '([.Records[].Id] | max // 0) + 1' "$db_zone_file")
     db_tmp_file=$MOCK_BUNNY_STATE/.zone.$$.json
-    jq --argjson id "$db_record_id" --slurpfile record "$db_body_file" \
-      '.Records += [($record[0] + {Id: $id})]' "$db_zone_file" >"$db_tmp_file" || exit 2
+    jq --argjson id "$db_record_id" --slurpfile record "$db_body_file" '
+      .Records += [(
+        $record[0]
+        | if has("AutoSslIssuance") then . else . + {AutoSslIssuance: true} end
+        | . + {Id: $id}
+      )]
+    ' "$db_zone_file" >"$db_tmp_file" || exit 2
     mv "$db_tmp_file" "$db_zone_file"
     jq --argjson id "$db_record_id" '.Records[] | select(.Id == $id)' \
       "$db_zone_file" >"$db_output_file"

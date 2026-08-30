@@ -5,16 +5,16 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.5.4
+# Version: 0.5.5
 # Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 12
+# Update #: 13
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.5.4
+VERSION=0.5.5
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
@@ -934,6 +934,18 @@ canonical_direct_body() {
   ' "$1"
 }
 
+canonical_add_body() {
+  # Bunny may assign advanced fields that the direct add interface does not
+  # submit. Verify every submitted field without inventing values for those
+  # server-managed additions.
+  jq -Sc '{
+    Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
+    Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
+    Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false),
+    Comment: (.Comment // "")
+  }' "$1"
+}
+
 canonical_zone_record() {
   db_record_id=$1
   jq -Sc --argjson id "$db_record_id" '
@@ -954,6 +966,30 @@ canonical_zone_record() {
         Comment: (.Comment // ""), AutoSslIssuance: (.AutoSslIssuance // false)
       }
   ' "$ZONE_FILE"
+}
+
+canonical_added_zone_record() {
+  db_record_id=$1
+  jq -Sc --argjson id "$db_record_id" '
+    .Records[] | select(.Id == $id)
+    | {
+        Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
+        Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
+        Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false),
+        Comment: (.Comment // "")
+      }
+  ' "$ZONE_FILE"
+}
+
+verify_added_record() {
+  db_record_id=$1
+  db_body_path=$2
+  db_actual=$(canonical_added_zone_record "$db_record_id") \
+    || die 'cannot verify added DNS record'
+  db_wanted=$(canonical_add_body "$db_body_path") \
+    || die 'cannot normalize direct DNS record request'
+  [ -n "$db_actual" ] && [ "$db_actual" = "$db_wanted" ] \
+    || die "Bunny DNS record $db_record_id did not verify after the mutation"
 }
 
 verify_direct_record() {
@@ -1023,7 +1059,7 @@ cmd_add() {
     || die 'cannot read the new Bunny DNS record identifier'
   validate_record_id "$db_record_id"
   fetch_zone
-  verify_direct_record "$db_record_id" "$db_body_path"
+  verify_added_record "$db_record_id" "$db_body_path"
   db_type_name=$(record_type_name "$(jq '.Type' "$db_body_path")")
   db_name=$(jq -r 'if .Name == "" then "@" else .Name end' "$db_body_path")
   say "Added DNS record id=$db_record_id: $db_type_name $db_name $CLI_VALUE"

@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.4
+# Version: 0.5.5
 # Last-Updated: 2026-08-30
-# Update #: 8
+# Update #: 9
 
 * Overview
 
@@ -172,6 +172,12 @@ The direct =add= command accepts =--ttl=, =--priority=, =--weight=, =--port=,
 =--flags=, =--tag=, =--disable=, and =--enable=.  =update= also accepts
 =--type=, =--name=, and =--value=.  Use =@= for the apex.  The supported record
 types and field limits are the same as in a JSON declaration.
+
+After =add=, verification requires every submitted field to match.  Fields
+that the add request does not submit, such as Bunny-assigned automatic-SSL
+state, are accepted rather than compared with invented defaults.  Updates and
+identity replacements remain strict because they submit and preserve those
+advanced fields.
 
 =update= and =delete= use the exact numeric ID printed by =list=.  This is
 intentional: a name and type are not unique because DNS record sets commonly

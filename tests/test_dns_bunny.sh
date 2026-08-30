@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.4
+# Version: 0.5.5
 # Last-Updated: 2026-08-30
-# Update #: 6
+# Update #: 7
 
 set -u
 LC_ALL=C
@@ -182,10 +182,10 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.5.4' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.5.5' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.5.4' 'version command is exact'
+expect_output 'dns_bunny.sh 0.5.5' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -305,6 +305,8 @@ expect_status 0 'direct add accepts record fields from CLI arguments' env \
 expect_output 'Added DNS record id=105: A cli 192.0.2.55' 'direct add reports the new record ID'
 expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli" and .Value == "192.0.2.55" and .Ttl == 60)] | length == 1' \
   "$db_state_dir/zone.json" 'direct add uses the 60-second TTL default'
+expect_jq '[.Records[] | select(.Id == 105 and .AutoSslIssuance == true)] | length == 1' \
+  "$db_state_dir/zone.json" 'direct add accepts Bunny-assigned automatic SSL state'
 
 db_advanced_zone=$db_test_root/direct-advanced-zone.json
 jq '.Records |= map(if .Id == 105 then . + {

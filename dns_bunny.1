@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.5.4
+.\" Version: 0.5.5
 .\" Last-Updated: 2026-08-30 Sun 00:00
-.\" Update #: 12
-.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.4" "SCS Commands"
+.\" Update #: 13
+.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.5" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .SH SYNOPSIS
@@ -121,6 +121,9 @@ This command is read-only.
 .BI add " zone type name value " "[record-options]"
 Create one standard DNS record from command-line fields, then fetch and verify
 it.
+Verification requires every submitted field to match but accepts advanced
+fields assigned by Bunny and omitted from the add request, such as automatic
+SSL state.
 The command refuses an identical record or a CNAME exclusivity violation and
 writes a protected pre-change snapshot.
 .TP
