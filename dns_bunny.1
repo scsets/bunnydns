@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.5.3
+.\" Version: 0.5.4
 .\" Last-Updated: 2026-08-30 Sun 00:00
-.\" Update #: 11
-.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.3" "SCS Commands"
+.\" Update #: 12
+.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.4" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .SH SYNOPSIS
@@ -323,12 +323,7 @@ These files include public DNS data and Bunny record identifiers, but not the
 API key.
 The timestamp and process ID are part of each filename, and an existing file is
 never overwritten.
-.SH PORTABILITY
-The program uses POSIX shell syntax and supports key-file mode checks on macOS,
-Linux, and SmartOS.
-It requires curl, jq 1.6 or newer, stat, mktemp, and ordinary POSIX utilities.
-The validator checks for the jq IN filter before reading a declaration.
-.PP
+.SH INSTALLATION
 The supplied GNU Makefile installs to
 .I $HOME/bin
 and
@@ -344,6 +339,39 @@ Use
 on SmartOS.
 Absolute BINDIR and MANDIR overrides and an absolute DESTDIR staging prefix are
 supported.
+.PP
+.B gmake update
+computes the MD5 digests of the source and installed scripts.
+Identical content is reported and left untouched.
+Differing content is reported with the installed and incoming versions and both
+digests, then
+.B uninstall
+and
+.B install
+run sequentially.
+A missing installed script is installed directly.
+.PP
+.B gmake check
+validates
+.IR dns_bunny.sh.md5 .
+After reviewing a script change, run
+.B gmake checksum
+to refresh this source-tree sidecar.
+MD5 is used only for content comparison and accidental-corruption detection;
+it does not authenticate the source.
+.SH PORTABILITY
+The program uses POSIX shell syntax and supports key-file mode checks on macOS,
+Linux, and SmartOS.
+It requires curl, jq 1.6 or newer, stat, mktemp, and ordinary POSIX utilities.
+The validator checks for the jq IN filter before reading a declaration.
+Project checks and installation updates also require macOS
+.BR md5 ,
+SmartOS
+.BR digest ,
+GNU
+.BR md5sum ,
+or
+.BR openssl .
 .SH EXIT STATUS
 .TP
 .B 0
@@ -365,6 +393,9 @@ Default protected snapshot directory for direct mutations.
 .TP
 .I records.example.json
 Copyable declaration schema with non-secret example values.
+.TP
+.I dns_bunny.sh.md5
+Source-tree MD5 sidecar checked before installation; it is not installed.
 .TP
 .I README.org
 Quickstart, safety model, installation instructions, and integration guidance.

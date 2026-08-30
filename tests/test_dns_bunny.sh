@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.3
+# Version: 0.5.4
 # Last-Updated: 2026-08-30
-# Update #: 5
+# Update #: 6
 
 set -u
 LC_ALL=C
@@ -182,10 +182,10 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.5.3' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.5.4' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.5.3' 'version command is exact'
+expect_output 'dns_bunny.sh 0.5.4' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'

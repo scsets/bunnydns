@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.3
+# Version: 0.5.4
 # Last-Updated: 2026-08-30
-# Update #: 7
+# Update #: 8
 
 * Overview
 
@@ -108,6 +108,8 @@ Review the complete plan.  The first DNS mutation is explicit:
 - Network access to =https://api.bunny.net= for =check=, =list=, =add=,
   =update=, =delete=, =plan=, =apply=, =verify=, and =prune=.
 - GNU Make for project checks and installation.  Invoke =gmake= on SmartOS.
+- An MD5 implementation for project verification and installation updates:
+  macOS =md5=, SmartOS =digest=, GNU =md5sum=, or =openssl=.
 - Optional =shellcheck= and either =mandoc= or =nroff= for fuller local checks.
 
 * Record declaration
@@ -267,6 +269,13 @@ page in =$HOME/share/man/man1=.  On SmartOS, installation is permitted only in
 the global zone and defaults to =/opt/custom/bin= and
 =/opt/custom/share/man/man1=.
 
+Use =gmake update= for an existing installation.  It computes the MD5 of the
+source and installed scripts rather than trusting their version strings.  If
+the contents are identical, it reports that no update is needed and changes
+nothing.  If they differ, it prints the installed and incoming versions and
+both MD5 values, then runs =uninstall= followed by =install=.  A missing
+installed script is treated as a first installation.
+
 Override logical destinations with absolute paths:
 
 #+begin_src sh
@@ -282,6 +291,13 @@ gmake uninstall DESTDIR=/tmp/bunny-dns-stage
 
 =uninstall= removes only =dns_bunny.sh= and =dns_bunny.1=; it preserves their
 containing directories.
+
+=dns_bunny.sh.md5= is a source-tree sidecar in the usual
+=checksum  filename= form.  =gmake check= validates it, and =gmake checksum=
+refreshes it after a reviewed script change.  The sidecar is not installed:
+=update= computes both live checksums independently.  MD5 is used here only to
+detect equality and accidental corruption; it is not a signature and does not
+authenticate the source.
 
 * Future plans and possibilities
 
@@ -310,6 +326,7 @@ compatibility and TLS boundary are verified.
 Run:
 
 #+begin_src sh
+gmake checksum       # after reviewing a change to dns_bunny.sh
 gmake self-check
 #+end_src
 
@@ -320,10 +337,11 @@ planning, fail-closed plan construction, adoption, reconciliation,
 owner-isolated pruning, protected backups, lookup failures, the jq feature
 floor, and Darwin/Linux/SunOS key-mode branches without using a real account.
 
-The project also checks staged install and uninstall behavior during release
-verification.  A live Bunny API call is intentionally not part of the offline
-suite; run =check= and =plan= against a reviewed project declaration before the
-first real =apply=.
+The project also checks checksum validation and staged install, no-op update,
+content-drift update, and uninstall behavior during release verification.  A
+live Bunny API call is intentionally not part of the offline suite; run =check=
+and =plan= against a reviewed project declaration before the first real
+=apply=.
 
 * References
 

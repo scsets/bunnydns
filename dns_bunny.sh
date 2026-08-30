@@ -5,16 +5,16 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.5.3
+# Version: 0.5.4
 # Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 11
+# Update #: 12
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.5.3
+VERSION=0.5.4
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
