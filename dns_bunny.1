@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.5.1
+.\" Version: 0.5.2
 .\" Last-Updated: 2026-08-30 Sun 00:00
-.\" Update #: 9
-.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.1" "SCS Commands"
+.\" Update #: 10
+.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.2" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .SH SYNOPSIS
@@ -22,6 +22,11 @@ dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .RI [ "global-options" ]
 .B list
 .I zone
+.br
+.B dns_bunny.sh
+.RI [ "global-options" ]
+.B list --declaration
+.I records.json
 .br
 .B dns_bunny.sh
 .RI [ "global-options" ]
@@ -41,7 +46,7 @@ dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .br
 .B dns_bunny.sh
 .RI [ "global-options" ]
-.BR validate | check | list | plan | apply | verify | prune
+.BR validate | check | plan | apply | verify | prune
 .I records.json
 .SH DESCRIPTION
 .B dns_bunny.sh
@@ -104,9 +109,11 @@ This command is read-only.
 Print every current record, its numeric ID, public value, and routing fields
 without comments or credentials.
 No JSON declaration is required.
-An existing
+A local file with the same name does not change the zone interpretation.
+Pass
+.B list --declaration
 .I records.json
-may be passed instead for backward compatibility.
+to use an explicit declaration instead.
 This command is read-only.
 .TP
 .BI add " zone type name value " "[record-options]"
@@ -120,6 +127,9 @@ Change only the fields named by the record options, preserve the remaining
 fields and comment, then fetch and verify the result.
 Changing the name or type uses a backed-up delete-then-create replacement and
 may assign a new record ID.
+Writable acceleration, monitoring, smart-routing, geolocation,
+environment-variable, and automatic-SSL fields are preserved through both
+ordinary updates and replacements.
 .TP
 .BI delete " zone record-id"
 Write a protected snapshot, delete exactly the numeric record ID, fetch the
@@ -192,6 +202,10 @@ record.
 An update preserves its ownership comment, so a later file-based apply may
 restore the declared value; a directly deleted declared record may be
 recreated.
+.PP
+Direct updates also carry forward writable Bunny fields that are not exposed
+as record options, including acceleration, monitoring, smart routing,
+geolocation, environment variables, and automatic SSL issuance.
 .SH RECORD FILE
 The top-level JSON object contains:
 .TP

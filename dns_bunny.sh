@@ -5,16 +5,16 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.5.1
+# Version: 0.5.2
 # Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 9
+# Update #: 10
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.5.1
+VERSION=0.5.2
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
@@ -45,13 +45,13 @@ Usage:
   dns_bunny.sh help
   dns_bunny.sh version
   dns_bunny.sh [--api-key FILE] list ZONE
+  dns_bunny.sh [--api-key FILE] list --declaration RECORDS.json
   dns_bunny.sh [--api-key FILE] [--backup-dir DIR] add ZONE TYPE NAME VALUE [OPTIONS]
   dns_bunny.sh [--api-key FILE] [--backup-dir DIR] update ZONE RECORD_ID OPTIONS
   dns_bunny.sh [--api-key FILE] [--backup-dir DIR] delete ZONE RECORD_ID
   dns_bunny.sh init-key KEYFILE
   dns_bunny.sh validate RECORDS.json
   dns_bunny.sh check RECORDS.json
-  dns_bunny.sh list RECORDS.json
   dns_bunny.sh plan RECORDS.json
   dns_bunny.sh apply RECORDS.json
   dns_bunny.sh verify RECORDS.json
@@ -66,7 +66,7 @@ Record OPTIONS are --ttl, --type, --name, --value, --priority, --weight,
 VALUE positionally; update accepts only the fields that should change. TTL
 defaults to 60 seconds when omitted.
 
-List accepts either a zone name or an existing RECORDS.json declaration.
+List takes a zone name. Use list --declaration for a RECORDS.json file.
 With no command, nothing changes. Mutations require add, update, delete,
 apply, prune, or init-key. --api-key names a file; it never accepts the secret.
 EOF
@@ -128,12 +128,12 @@ require_file_mode_tool() {
 }
 
 default_api_key_file() {
-  [ -n "${HOME:-}" ] || die 'HOME is not set; provide --api-key FILE'
+  [ -n "${HOME:-}" ] || return 1
   printf '%s\n' "$HOME/.secrets/bunnynet-api-key"
 }
 
 default_backup_dir() {
-  [ -n "${HOME:-}" ] || die 'HOME is not set; provide --backup-dir DIR'
+  [ -n "${HOME:-}" ] || return 1
   printf '%s\n' "$HOME/.local/state/dns-bunny/backups"
 }
 
@@ -347,16 +347,26 @@ prepare_direct() {
   if [ -n "$API_KEY_OPTION" ]; then
     KEY_FILE=$API_KEY_OPTION
   else
-    KEY_FILE=$(default_api_key_file)
-  fi
-  if [ -n "$BACKUP_DIR_OPTION" ]; then
-    BACKUP_DIR=$BACKUP_DIR_OPTION
-  else
-    BACKUP_DIR=$(default_backup_dir)
+    KEY_FILE=$(default_api_key_file) \
+      || die 'HOME is not set; provide --api-key FILE'
   fi
   load_api_key
   find_zone
   fetch_zone
+}
+
+prepare_direct_mutation() {
+  if [ -n "$BACKUP_DIR_OPTION" ]; then
+    BACKUP_DIR=$BACKUP_DIR_OPTION
+  else
+    BACKUP_DIR=$(default_backup_dir) \
+      || die 'HOME is not set; provide --backup-dir DIR'
+  fi
+  case "$BACKUP_DIR" in
+    /*) ;;
+    *) die 'backup_dir must be absolute' ;;
+  esac
+  prepare_direct "$1"
 }
 
 append_action() {
@@ -618,7 +628,7 @@ record_type_id() {
     SVCB) printf '%s\n' 13 ;;
     HTTPS) printf '%s\n' 14 ;;
     TLSA) printf '%s\n' 15 ;;
-    *) die "unsupported DNS record type: $1" ;;
+    *) return 1 ;;
   esac
 }
 
@@ -697,7 +707,8 @@ parse_record_options() {
     case "$1" in
       --type)
         [ "$#" -ge 2 ] || die '--type requires TYPE'
-        CLI_TYPE=$(record_type_id "$2")
+        CLI_TYPE=$(record_type_id "$2") \
+          || die "unsupported DNS record type: $2"
         CLI_TYPE_SET=true
         CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
         shift 2
@@ -789,6 +800,8 @@ write_add_body() {
 write_update_body() {
   db_record_id=$1
   db_body_path=$2
+  # The same body can update in place or create an identity replacement. Carry
+  # Bunny's writable advanced fields so a rename does not reset record policy.
   jq --argjson id "$db_record_id" \
     --arg type_set "$CLI_TYPE_SET" --argjson type "$CLI_TYPE" \
     --arg ttl_set "$CLI_TTL_SET" --argjson ttl "$CLI_TTL" \
@@ -800,7 +813,9 @@ write_update_body() {
     --arg tag_set "$CLI_TAG_SET" --arg tag "$CLI_TAG" \
     --arg port_set "$CLI_PORT_SET" --argjson port "$CLI_PORT" \
     --arg disabled_set "$CLI_DISABLED_SET" --argjson disabled "$CLI_DISABLED" '
-      .Records[] | select(.Id == $id) | {
+      .Records[] | select(.Id == $id)
+      | (.PullZoneId // .AcceleratedPullZoneId // 0) as $pull_zone_id
+      | {
         Type: (if $type_set == "true" then $type else .Type end),
         Ttl: (if $ttl_set == "true" then $ttl else (.Ttl // 60) end),
         Value: (if $value_set == "true" then $value else (.Value // "") end),
@@ -810,8 +825,18 @@ write_update_body() {
         Flags: (if $flags_set == "true" then $flags else (.Flags // 0) end),
         Tag: (if $tag_set == "true" then $tag else (.Tag // "") end),
         Port: (if $port_set == "true" then $port else (.Port // 0) end),
+        PullZoneId: (if $pull_zone_id > 0 then $pull_zone_id else null end),
+        ScriptId: (if (.ScriptId // 0) > 0 then .ScriptId else null end),
+        Accelerated: (.Accelerated // false),
+        MonitorType: (.MonitorType // null),
+        GeolocationLatitude: (.GeolocationLatitude // null),
+        GeolocationLongitude: (.GeolocationLongitude // null),
+        LatencyZone: (.LatencyZone // null),
+        SmartRoutingType: (.SmartRoutingType // null),
         Disabled: (if $disabled_set == "true" then $disabled else (.Disabled // false) end),
-        Comment: (.Comment // "")
+        EnviromentalVariables: (.EnviromentalVariables // null),
+        Comment: (.Comment // ""),
+        AutoSslIssuance: (.AutoSslIssuance // false)
       }
     ' "$ZONE_FILE" >"$db_body_path" || die 'cannot construct direct DNS record update'
 }
@@ -870,18 +895,40 @@ validate_direct_body() {
     and (.Flags | type == "number" and floor == . and . >= 0 and . <= 255)
     and (.Tag | type == "string")
     and (.Port | type == "number" and floor == . and . >= 0 and . <= 2147483647)
+    and (.PullZoneId == null or (.PullZoneId | type == "number" and floor == . and . > 0))
+    and (.ScriptId == null or (.ScriptId | type == "number" and floor == . and . > 0))
+    and ((.Accelerated // false) | type == "boolean")
+    and ((.MonitorType // 0) | IN(0, 1, 2, 3))
+    and ((.GeolocationLatitude // 0) | type == "number")
+    and ((.GeolocationLongitude // 0) | type == "number")
+    and ((.LatencyZone // "") | type == "string")
+    and ((.SmartRoutingType // 0) | IN(0, 1, 2))
     and (.Disabled | type == "boolean")
+    and ((.EnviromentalVariables // []) | type == "array"
+      and all(.[]; .Name | type == "string")
+      and all(.[]; .Value | type == "string"))
     and (.Comment | type == "string")
+    and ((.AutoSslIssuance // false) | type == "boolean")
   ' "$1" >/dev/null || die 'direct DNS record fields are invalid'
 }
 
 canonical_direct_body() {
   jq -Sc '
+    (.PullZoneId // .AcceleratedPullZoneId // 0) as $pull_zone_id
+    |
     {
       Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
       Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
-      Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false),
-      Comment: (.Comment // "")
+      Tag: (.Tag // ""), Port: (.Port // 0),
+      PullZoneId: (if $pull_zone_id > 0 then $pull_zone_id else null end),
+      ScriptId: (if (.ScriptId // 0) > 0 then .ScriptId else null end),
+      Accelerated: (.Accelerated // false), MonitorType: (.MonitorType // 0),
+      GeolocationLatitude: (.GeolocationLatitude // 0),
+      GeolocationLongitude: (.GeolocationLongitude // 0),
+      LatencyZone: (.LatencyZone // ""), SmartRoutingType: (.SmartRoutingType // 0),
+      Disabled: (.Disabled // false),
+      EnviromentalVariables: (.EnviromentalVariables // []),
+      Comment: (.Comment // ""), AutoSslIssuance: (.AutoSslIssuance // false)
     }
   ' "$1"
 }
@@ -890,11 +937,20 @@ canonical_zone_record() {
   db_record_id=$1
   jq -Sc --argjson id "$db_record_id" '
     .Records[] | select(.Id == $id)
+    | (.PullZoneId // .AcceleratedPullZoneId // 0) as $pull_zone_id
     | {
         Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
         Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
-        Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false),
-        Comment: (.Comment // "")
+        Tag: (.Tag // ""), Port: (.Port // 0),
+        PullZoneId: (if $pull_zone_id > 0 then $pull_zone_id else null end),
+        ScriptId: (if (.ScriptId // 0) > 0 then .ScriptId else null end),
+        Accelerated: (.Accelerated // false), MonitorType: (.MonitorType // 0),
+        GeolocationLatitude: (.GeolocationLatitude // 0),
+        GeolocationLongitude: (.GeolocationLongitude // 0),
+        LatencyZone: (.LatencyZone // ""), SmartRoutingType: (.SmartRoutingType // 0),
+        Disabled: (.Disabled // false),
+        EnviromentalVariables: (.EnviromentalVariables // []),
+        Comment: (.Comment // ""), AutoSslIssuance: (.AutoSslIssuance // false)
       }
   ' "$ZONE_FILE"
 }
@@ -923,17 +979,17 @@ cmd_check() {
 }
 
 cmd_list() {
-  case "$1" in
-    *.json)
-      prepare_online "$1"
+  # Declaration mode is explicit so a local file can never shadow a zone name.
+  case "$#" in
+    1)
+      prepare_direct "$1"
       ;;
-    *)
-      if [ -f "$1" ]; then
-        prepare_online "$1"
-      else
-        prepare_direct "$1"
-      fi
+    2)
+      [ "$1" = --declaration ] \
+        || die 'usage: dns_bunny.sh list ZONE|--declaration RECORDS.json'
+      prepare_online "$2"
       ;;
+    *) die 'usage: dns_bunny.sh list ZONE|--declaration RECORDS.json' ;;
   esac
   print_zone_records
 }
@@ -942,7 +998,8 @@ cmd_add() {
   [ "$#" -ge 4 ] || die 'usage: dns_bunny.sh add ZONE TYPE NAME VALUE [OPTIONS]'
   db_direct_zone=$1
   reset_record_options
-  CLI_TYPE=$(record_type_id "$2")
+  CLI_TYPE=$(record_type_id "$2") \
+    || die "unsupported DNS record type: $2"
   CLI_TYPE_SET=true
   validate_record_name "$3"
   CLI_NAME=$3
@@ -954,7 +1011,7 @@ cmd_add() {
   shift 4
   parse_record_options "$@"
 
-  prepare_direct "$db_direct_zone"
+  prepare_direct_mutation "$db_direct_zone"
   db_body_path=$WORK_DIR/direct-record.json
   write_add_body "$db_body_path"
   validate_direct_body "$db_body_path"
@@ -981,7 +1038,7 @@ cmd_update() {
   parse_record_options "$@"
   [ "$CLI_CHANGE_COUNT" -gt 0 ] || die 'update requires at least one record option'
 
-  prepare_direct "$db_direct_zone"
+  prepare_direct_mutation "$db_direct_zone"
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot locate the Bunny DNS record'
   [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
@@ -1033,7 +1090,7 @@ cmd_delete() {
   db_direct_zone=$1
   db_record_id=$2
   validate_record_id "$db_record_id"
-  prepare_direct "$db_direct_zone"
+  prepare_direct_mutation "$db_direct_zone"
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot locate the Bunny DNS record'
   [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
@@ -1219,8 +1276,7 @@ case "$command_name" in
     cmd_check "$1"
     ;;
   list)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh list ZONE|RECORDS.json'
-    cmd_list "$1"
+    cmd_list "$@"
     ;;
   add)
     cmd_add "$@"

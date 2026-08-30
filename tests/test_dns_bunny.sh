@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.1
+# Version: 0.5.2
 # Last-Updated: 2026-08-30
-# Update #: 3
+# Update #: 4
 
 set -u
 LC_ALL=C
@@ -182,10 +182,10 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.5.1' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.5.2' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.5.1' 'version command is exact'
+expect_output 'dns_bunny.sh 0.5.2' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -264,9 +264,9 @@ expect_status 0 'verify accepts the converged declaration' env \
   "$db_program" verify "$db_config_file"
 expect_output 'All declared DNS records match Bunny.' 'verify reports a clean declaration'
 
-expect_status 0 'list succeeds against the offline API' env \
+expect_status 0 'explicit declaration listing succeeds against the offline API' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
-  "$db_program" list "$db_config_file"
+  "$db_program" list --declaration "$db_config_file"
 expect_output 'A api 192.0.2.11' 'list shows public record data'
 expect_output 'id=104' 'list exposes stable record IDs for direct editing'
 db_checks=$((db_checks + 1))
@@ -279,10 +279,19 @@ db_direct_home=$db_test_root/direct-home
 mkdir -p "$db_direct_home/.secrets" || exit 1
 cp "$db_key_file" "$db_direct_home/.secrets/bunnynet-api-key" || exit 1
 chmod 600 "$db_direct_home/.secrets/bunnynet-api-key" || exit 1
-expect_status 0 'a zone can be listed without a JSON declaration' env \
+: >"$db_direct_home/example.test" || exit 1
+db_original_dir=$(pwd)
+cd "$db_direct_home" || exit 1
+expect_status 0 'a same-named local file does not shadow a zone listing' env \
   HOME="$db_direct_home" MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" list example.test
+cd "$db_original_dir" || exit 1
 expect_output 'id=104 A api 192.0.2.11' 'direct list uses the default protected key path'
+
+expect_status 0 'read-only listing needs no HOME-backed backup directory' env \
+  HOME= MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" list example.test
+expect_output 'id=104 A api 192.0.2.11' 'explicit key path is sufficient for read-only listing'
 
 expect_status 0 'direct add accepts record fields from CLI arguments' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
@@ -292,6 +301,20 @@ expect_output 'Added DNS record id=105: A cli 192.0.2.55' 'direct add reports th
 expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli" and .Value == "192.0.2.55" and .Ttl == 60)] | length == 1' \
   "$db_state_dir/zone.json" 'direct add uses the 60-second TTL default'
 
+db_advanced_zone=$db_test_root/direct-advanced-zone.json
+jq '.Records |= map(if .Id == 105 then . + {
+  Accelerated: true,
+  AcceleratedPullZoneId: 777,
+  MonitorType: 2,
+  GeolocationLatitude: 41.9028,
+  GeolocationLongitude: 12.4964,
+  LatencyZone: "EU",
+  SmartRoutingType: 1,
+  EnviromentalVariables: [{Name: "REGION", Value: "eu"}],
+  AutoSslIssuance: true
+} else . end)' "$db_state_dir/zone.json" >"$db_advanced_zone" || exit 1
+mv "$db_advanced_zone" "$db_state_dir/zone.json" || exit 1
+
 expect_status 0 'direct update changes only named fields' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" --api-key "$db_key_file" --backup-dir "$db_direct_backup_dir" \
@@ -299,6 +322,10 @@ expect_status 0 'direct update changes only named fields' env \
 expect_output 'Updated DNS record id=105.' 'direct update reports the stable record ID'
 expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli" and .Value == "192.0.2.56" and .Ttl == 60 and .Disabled)] | length == 1' \
   "$db_state_dir/zone.json" 'direct update preserves fields that were not named'
+expect_jq '[.Records[] | select(.Id == 105 and .Accelerated and .PullZoneId == 777 and
+  .MonitorType == 2 and .SmartRoutingType == 1 and .AutoSslIssuance and
+  .EnviromentalVariables == [{"Name":"REGION","Value":"eu"}])] | length == 1' \
+  "$db_state_dir/zone.json" 'direct update preserves advanced Bunny record fields'
 
 expect_status 0 'direct identity changes replace the Bunny record safely' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
@@ -307,6 +334,10 @@ expect_status 0 'direct identity changes replace the Bunny record safely' env \
 expect_output 'Replaced DNS record id=105 with id=105.' 'direct replacement reports old and new IDs'
 expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli-renamed" and .Value == "192.0.2.56")] | length == 1' \
   "$db_state_dir/zone.json" 'direct replacement preserves the record value'
+expect_jq '[.Records[] | select(.Id == 105 and .Accelerated and .PullZoneId == 777 and
+  .MonitorType == 2 and .SmartRoutingType == 1 and .AutoSslIssuance and
+  .EnviromentalVariables == [{"Name":"REGION","Value":"eu"}])] | length == 1' \
+  "$db_state_dir/zone.json" 'direct replacement preserves advanced Bunny record fields'
 
 expect_status 0 'direct delete removes the exact numeric record ID' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
@@ -327,6 +358,23 @@ fi
 expect_status 1 'direct add validates record options before contacting Bunny' \
   "$db_program" --api-key "$db_key_file" add example.test A bad 192.0.2.99 --ttl 0
 expect_output 'ttl must be greater than zero' 'invalid direct TTL explains the accepted range'
+
+db_request_count_before=$(wc -l <"$db_state_dir/requests.log" | tr -d ' ')
+expect_status 1 'an invalid positional type stops before Bunny access' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" add example.test NOT_A_TYPE bad 192.0.2.99
+expect_output 'unsupported DNS record type: NOT_A_TYPE' 'invalid positional type is reported directly'
+expect_status 1 'an invalid update type stops before Bunny access' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" update example.test 104 --type NOT_A_TYPE
+expect_output 'unsupported DNS record type: NOT_A_TYPE' 'invalid update type is reported directly'
+db_request_count_after=$(wc -l <"$db_state_dir/requests.log" | tr -d ' ')
+db_checks=$((db_checks + 1))
+if [ "$db_request_count_before" -eq "$db_request_count_after" ]; then
+  record_success 'invalid direct types perform no Bunny API request'
+else
+  record_failure 'invalid direct types contacted the Bunny API'
+fi
 
 db_replace_config=$db_test_root/replace-records.json
 jq --arg backup_dir "$db_replace_backup_dir" \

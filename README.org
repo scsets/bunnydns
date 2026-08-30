@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.1
+# Version: 0.5.2
 # Last-Updated: 2026-08-30
-# Update #: 5
+# Update #: 6
 
 * Overview
 
@@ -144,7 +144,9 @@ exclusivity.
 - =check=: verify dependencies, key protection, API access, owner, and exact
   zone lookup.
 - =list ZONE=: show every current record and its numeric ID without requiring a
-  declaration.  =list RECORDS.json= remains available for existing scripts.
+  declaration.  A local file with the same name never changes this meaning.
+- =list --declaration RECORDS.json=: use the zone and key-file settings from an
+  explicit declaration.
 - =add ZONE TYPE NAME VALUE=: create one record from CLI fields.
 - =update ZONE RECORD_ID OPTIONS=: change only the named fields of one record.
 - =delete ZONE RECORD_ID=: delete exactly one record by its numeric ID.
@@ -172,6 +174,11 @@ types and field limits are the same as in a JSON declaration.
 intentional: a name and type are not unique because DNS record sets commonly
 contain several values.  A name or type change uses a backed-up
 delete-then-create replacement and may receive a new ID.
+
+An update also preserves writable Bunny fields that the direct CLI does not
+configure, including acceleration, monitoring, smart-routing, geolocation,
+environment-variable, and automatic-SSL settings.  The same preservation
+applies when a name or type change requires a replacement record.
 
 Direct commands act on the selected ID even when its comment marks it as owned
 by a JSON declaration.  =update= preserves that comment, so the next =plan=
@@ -305,8 +312,9 @@ Run:
 gmake self-check
 #+end_src
 
-The offline suite uses a stateful fake Bunny API.  It exercises direct listing,
-adding, partial updating, identity replacement, deletion, JSON validation,
+The offline suite uses a stateful fake Bunny API.  It exercises unambiguous
+direct and declaration listing, adding, partial updating, advanced-field
+preservation, identity replacement, deletion, JSON validation,
 planning, fail-closed plan construction, adoption, reconciliation,
 owner-isolated pruning, protected backups, lookup failures, the jq feature
 floor, and Darwin/Linux/SunOS key-mode branches without using a real account.
