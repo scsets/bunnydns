@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.4.1
-# Last-Updated: 2026-08-29
-# Update #: 1
+# Version: 0.5.1
+# Last-Updated: 2026-08-30
+# Update #: 3
 
 set -u
 LC_ALL=C
@@ -101,6 +101,7 @@ db_key_file=$db_test_root/secrets/api-key
 db_backup_dir=$db_test_root/backups
 db_replace_backup_dir=$db_test_root/replace-backups
 db_prune_backup_dir=$db_test_root/prune-backups
+db_direct_backup_dir=$db_test_root/direct-backups
 db_config_file=$db_test_root/records.json
 db_real_jq=$(command -v jq) || exit 1
 
@@ -175,16 +176,16 @@ cat >"$db_config_file" <<EOF
   "records": [
     {"key": "web-origin", "type": "A", "name": "www", "value": "192.0.2.10", "ttl": 300},
     {"key": "site-verification", "type": "TXT", "name": "@", "value": "service-verification=ready", "ttl": 300},
-    {"key": "api-origin", "type": "A", "name": "api", "value": "192.0.2.11", "ttl": 300}
+    {"key": "api-origin", "type": "A", "name": "api", "value": "192.0.2.11"}
   ]
 }
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.4.1' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.5.1' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.4.1' 'version command is exact'
+expect_output 'dns_bunny.sh 0.5.1' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -238,8 +239,8 @@ expect_status 0 'apply performs and verifies the planned changes' env \
 expect_output 'Applied and verified 2 DNS change(s).' 'apply reports the mutation count'
 expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=web-origin")] | length == 1' \
   "$db_state_dir/zone.json" 'apply records ownership when adopting'
-expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=api-origin")] | length == 1' \
-  "$db_state_dir/zone.json" 'apply creates the missing owned record'
+expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=api-origin" and .Ttl == 60)] | length == 1' \
+  "$db_state_dir/zone.json" 'apply creates an omitted-TTL record with the 60-second default'
 expect_jq '[.Records[] | select(.Comment == "managed-by:other-project; key=other-origin")] | length == 1' \
   "$db_state_dir/zone.json" 'apply preserves another project owner'
 
@@ -267,11 +268,65 @@ expect_status 0 'list succeeds against the offline API' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" list "$db_config_file"
 expect_output 'A api 192.0.2.11' 'list shows public record data'
+expect_output 'id=104' 'list exposes stable record IDs for direct editing'
 db_checks=$((db_checks + 1))
 case "$db_command_output" in
   *managed-by:*|*test-bunny-api-key*) record_failure 'list exposed ownership or credential data' ;;
   *) record_success 'list omits ownership and credential data' ;;
 esac
+
+db_direct_home=$db_test_root/direct-home
+mkdir -p "$db_direct_home/.secrets" || exit 1
+cp "$db_key_file" "$db_direct_home/.secrets/bunnynet-api-key" || exit 1
+chmod 600 "$db_direct_home/.secrets/bunnynet-api-key" || exit 1
+expect_status 0 'a zone can be listed without a JSON declaration' env \
+  HOME="$db_direct_home" MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" list example.test
+expect_output 'id=104 A api 192.0.2.11' 'direct list uses the default protected key path'
+
+expect_status 0 'direct add accepts record fields from CLI arguments' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" --backup-dir "$db_direct_backup_dir" \
+  add example.test A cli 192.0.2.55
+expect_output 'Added DNS record id=105: A cli 192.0.2.55' 'direct add reports the new record ID'
+expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli" and .Value == "192.0.2.55" and .Ttl == 60)] | length == 1' \
+  "$db_state_dir/zone.json" 'direct add uses the 60-second TTL default'
+
+expect_status 0 'direct update changes only named fields' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" --backup-dir "$db_direct_backup_dir" \
+  update example.test 105 --value 192.0.2.56 --disable
+expect_output 'Updated DNS record id=105.' 'direct update reports the stable record ID'
+expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli" and .Value == "192.0.2.56" and .Ttl == 60 and .Disabled)] | length == 1' \
+  "$db_state_dir/zone.json" 'direct update preserves fields that were not named'
+
+expect_status 0 'direct identity changes replace the Bunny record safely' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" --backup-dir "$db_direct_backup_dir" \
+  update example.test 105 --name cli-renamed
+expect_output 'Replaced DNS record id=105 with id=105.' 'direct replacement reports old and new IDs'
+expect_jq '[.Records[] | select(.Id == 105 and .Name == "cli-renamed" and .Value == "192.0.2.56")] | length == 1' \
+  "$db_state_dir/zone.json" 'direct replacement preserves the record value'
+
+expect_status 0 'direct delete removes the exact numeric record ID' env \
+  MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" --backup-dir "$db_direct_backup_dir" \
+  delete example.test 105
+expect_output 'Deleted DNS record id=105 from example.test.' 'direct delete reports its target'
+expect_jq '[.Records[] | select(.Id == 105)] | length == 0' \
+  "$db_state_dir/zone.json" 'direct delete removes only the selected record'
+
+db_direct_backup_count=$(find "$db_direct_backup_dir" -type f | wc -l | tr -d ' ')
+db_checks=$((db_checks + 1))
+if [ "$db_direct_backup_count" -eq 4 ]; then
+  record_success 'every direct mutation writes a protected pre-change backup'
+else
+  record_failure "direct backup count is $db_direct_backup_count, expected 4"
+fi
+
+expect_status 1 'direct add validates record options before contacting Bunny' \
+  "$db_program" --api-key "$db_key_file" add example.test A bad 192.0.2.99 --ttl 0
+expect_output 'ttl must be greater than zero' 'invalid direct TTL explains the accepted range'
 
 db_replace_config=$db_test_root/replace-records.json
 jq --arg backup_dir "$db_replace_backup_dir" \

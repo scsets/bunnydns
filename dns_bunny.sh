@@ -1,20 +1,20 @@
 #!/bin/sh
 
 # Filename: dns_bunny.sh
-# Description: Reconcile project-owned Bunny DNS records from a declarative JSON file.
+# Description: Inspect, edit, and reconcile Bunny DNS records.
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.4.1
-# Last-Updated: 2026-08-29 Sat 00:00
-# Update #: 7
+# Version: 0.5.1
+# Last-Updated: 2026-08-30 Sun 00:00
+# Update #: 9
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.4.1
+VERSION=0.5.1
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
@@ -32,16 +32,22 @@ DESIRED_FILE=
 DESIRED_LINES=
 ZONE_FILE=
 PLAN_FILE=
+API_KEY_OPTION=
+BACKUP_DIR_OPTION=
 
 usage() {
   printf '%s %s\n' "$PROGRAM" "$VERSION"
   cat <<'EOF'
-Reconcile project-owned records in an existing Bunny DNS zone.
+Inspect, edit, or reconcile records in an existing Bunny DNS zone.
 
 Usage:
   dns_bunny.sh
   dns_bunny.sh help
   dns_bunny.sh version
+  dns_bunny.sh [--api-key FILE] list ZONE
+  dns_bunny.sh [--api-key FILE] [--backup-dir DIR] add ZONE TYPE NAME VALUE [OPTIONS]
+  dns_bunny.sh [--api-key FILE] [--backup-dir DIR] update ZONE RECORD_ID OPTIONS
+  dns_bunny.sh [--api-key FILE] [--backup-dir DIR] delete ZONE RECORD_ID
   dns_bunny.sh init-key KEYFILE
   dns_bunny.sh validate RECORDS.json
   dns_bunny.sh check RECORDS.json
@@ -51,8 +57,18 @@ Usage:
   dns_bunny.sh verify RECORDS.json
   dns_bunny.sh prune RECORDS.json
 
-With no command, nothing changes. Mutations require apply, prune, or init-key.
-The Bunny API key is read from the protected key_file named in RECORDS.json.
+Global options must precede the command:
+  --api-key FILE    Protected key file (default: $HOME/.secrets/bunnynet-api-key)
+  --backup-dir DIR  Direct-mutation backups (default: $HOME/.local/state/dns-bunny/backups)
+
+Record OPTIONS are --ttl, --type, --name, --value, --priority, --weight,
+--port, --flags, --tag, --disable, and --enable. Add takes TYPE, NAME, and
+VALUE positionally; update accepts only the fields that should change. TTL
+defaults to 60 seconds when omitted.
+
+List accepts either a zone name or an existing RECORDS.json declaration.
+With no command, nothing changes. Mutations require add, update, delete,
+apply, prune, or init-key. --api-key names a file; it never accepts the secret.
 EOF
 }
 
@@ -111,6 +127,24 @@ require_file_mode_tool() {
   esac
 }
 
+default_api_key_file() {
+  [ -n "${HOME:-}" ] || die 'HOME is not set; provide --api-key FILE'
+  printf '%s\n' "$HOME/.secrets/bunnynet-api-key"
+}
+
+default_backup_dir() {
+  [ -n "${HOME:-}" ] || die 'HOME is not set; provide --backup-dir DIR'
+  printf '%s\n' "$HOME/.local/state/dns-bunny/backups"
+}
+
+validate_zone_name() {
+  db_zone_to_validate=$1
+  require_jq
+  jq -en --arg zone "$db_zone_to_validate" '
+    $zone | type == "string" and test("^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
+  ' >/dev/null || die "invalid DNS zone name: $db_zone_to_validate"
+}
+
 validate_config() {
   CONFIG_FILE=$1
   [ -f "$CONFIG_FILE" ] || die "record file not found: $CONFIG_FILE"
@@ -132,7 +166,7 @@ validate_config() {
       and (.type | type == "string" and valid_type)
       and (.name | type == "string" and (. == "" or . == "@" or test("^[A-Za-z0-9_.*-]+$")))
       and (.value | type == "string" and length > 0)
-      and ((.ttl // 300) | positive_int)
+      and ((.ttl // 60) | positive_int)
       and ((.priority // 0) | nonnegative_int)
       and ((.weight // 0) | nonnegative_int)
       and ((.port // 0) | nonnegative_int)
@@ -148,8 +182,16 @@ validate_config() {
 load_settings() {
   OWNER=$(jq -r '.owner' "$CONFIG_FILE") || die "cannot read owner"
   ZONE=$(jq -r '.zone | ascii_downcase' "$CONFIG_FILE") || die "cannot read zone"
-  KEY_FILE=$(jq -r '.key_file' "$CONFIG_FILE") || die "cannot read key_file"
-  BACKUP_DIR=$(jq -r '.backup_dir' "$CONFIG_FILE") || die "cannot read backup_dir"
+  if [ -n "$API_KEY_OPTION" ]; then
+    KEY_FILE=$API_KEY_OPTION
+  else
+    KEY_FILE=$(jq -r '.key_file' "$CONFIG_FILE") || die "cannot read key_file"
+  fi
+  if [ -n "$BACKUP_DIR_OPTION" ]; then
+    BACKUP_DIR=$BACKUP_DIR_OPTION
+  else
+    BACKUP_DIR=$(jq -r '.backup_dir' "$CONFIG_FILE") || die "cannot read backup_dir"
+  fi
   MANAGED_PREFIX="managed-by:$OWNER; key="
 }
 
@@ -165,7 +207,7 @@ normalize_config() {
       Key: .key,
       TypeName: .type,
       Type: (.type | type_id),
-      Ttl: (.ttl // 300),
+      Ttl: (.ttl // 60),
       Value: .value,
       Name: (if .name == "@" then "" else .name end),
       Weight: (.weight // 0),
@@ -200,6 +242,10 @@ validate_api_key() {
 }
 
 load_api_key() {
+  case "$KEY_FILE" in
+    /*) ;;
+    *) die "Bunny API key file path must be absolute: $KEY_FILE" ;;
+  esac
   [ -f "$KEY_FILE" ] || die "Bunny API key file not found: $KEY_FILE"
   [ ! -L "$KEY_FILE" ] || die "Bunny API key file must not be a symbolic link"
 
@@ -287,6 +333,27 @@ prepare_online() {
   make_work_dir
   load_settings
   normalize_config
+  load_api_key
+  find_zone
+  fetch_zone
+}
+
+prepare_direct() {
+  validate_zone_name "$1"
+  require_command curl
+  require_file_mode_tool
+  make_work_dir
+  ZONE=$(printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]')
+  if [ -n "$API_KEY_OPTION" ]; then
+    KEY_FILE=$API_KEY_OPTION
+  else
+    KEY_FILE=$(default_api_key_file)
+  fi
+  if [ -n "$BACKUP_DIR_OPTION" ]; then
+    BACKUP_DIR=$BACKUP_DIR_OPTION
+  else
+    BACKUP_DIR=$(default_backup_dir)
+  fi
   load_api_key
   find_zone
   fetch_zone
@@ -486,7 +553,7 @@ backup_zone() {
   mkdir -p "$BACKUP_DIR" || die "cannot create DNS backup directory: $BACKUP_DIR"
   chmod 700 "$BACKUP_DIR" || die "cannot protect DNS backup directory"
   db_stamp=$(date -u '+%Y%m%dT%H%M%SZ') || die "cannot create backup timestamp"
-  db_backup=$BACKUP_DIR/$ZONE-$db_stamp.json
+  db_backup=$BACKUP_DIR/$ZONE-$db_stamp-$$.json
   [ ! -e "$db_backup" ] || die "refusing to overwrite existing zone backup: $db_backup"
   umask 077
   cp "$ZONE_FILE" "$db_backup" || die "cannot back up the Bunny zone"
@@ -536,6 +603,311 @@ verify_plan_is_clean() {
   [ "$db_not_ok" -eq 0 ] || die "$db_not_ok DNS record(s) do not match the declared state"
 }
 
+record_type_id() {
+  db_type_name=$(printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]')
+  case "$db_type_name" in
+    A) printf '%s\n' 0 ;;
+    AAAA) printf '%s\n' 1 ;;
+    CNAME) printf '%s\n' 2 ;;
+    TXT) printf '%s\n' 3 ;;
+    MX) printf '%s\n' 4 ;;
+    SRV) printf '%s\n' 8 ;;
+    CAA) printf '%s\n' 9 ;;
+    PTR) printf '%s\n' 10 ;;
+    NS) printf '%s\n' 12 ;;
+    SVCB) printf '%s\n' 13 ;;
+    HTTPS) printf '%s\n' 14 ;;
+    TLSA) printf '%s\n' 15 ;;
+    *) die "unsupported DNS record type: $1" ;;
+  esac
+}
+
+record_type_name() {
+  case "$1" in
+    0) printf '%s\n' A ;;
+    1) printf '%s\n' AAAA ;;
+    2) printf '%s\n' CNAME ;;
+    3) printf '%s\n' TXT ;;
+    4) printf '%s\n' MX ;;
+    8) printf '%s\n' SRV ;;
+    9) printf '%s\n' CAA ;;
+    10) printf '%s\n' PTR ;;
+    12) printf '%s\n' NS ;;
+    13) printf '%s\n' SVCB ;;
+    14) printf '%s\n' HTTPS ;;
+    15) printf '%s\n' TLSA ;;
+    *) die "unsupported Bunny DNS record type ID: $1" ;;
+  esac
+}
+
+validate_record_id() {
+  case "$1" in
+    ''|*[!0-9]*|0) die "RECORD_ID must be a positive integer: $1" ;;
+  esac
+}
+
+validate_nonnegative_integer() {
+  db_field=$1
+  db_value=$2
+  db_max=$3
+  case "$db_value" in
+    ''|*[!0-9]*) die "$db_field must be a non-negative integer: $db_value" ;;
+  esac
+  [ "$db_value" -le "$db_max" ] || die "$db_field must not exceed $db_max"
+}
+
+validate_positive_integer() {
+  validate_nonnegative_integer "$1" "$2" "$3"
+  [ "$2" -gt 0 ] || die "$1 must be greater than zero"
+}
+
+validate_record_name() {
+  db_name_to_validate=$1
+  jq -en --arg name "$db_name_to_validate" '
+    $name == "" or $name == "@" or ($name | test("^[A-Za-z0-9_.*-]+$"))
+  ' >/dev/null || die "invalid zone-relative DNS record name: $db_name_to_validate"
+}
+
+reset_record_options() {
+  CLI_TYPE_SET=false
+  CLI_TYPE=0
+  CLI_NAME_SET=false
+  CLI_NAME=
+  CLI_VALUE_SET=false
+  CLI_VALUE=
+  CLI_TTL_SET=false
+  CLI_TTL=60
+  CLI_PRIORITY_SET=false
+  CLI_PRIORITY=0
+  CLI_WEIGHT_SET=false
+  CLI_WEIGHT=0
+  CLI_PORT_SET=false
+  CLI_PORT=0
+  CLI_FLAGS_SET=false
+  CLI_FLAGS=0
+  CLI_TAG_SET=false
+  CLI_TAG=
+  CLI_DISABLED_SET=false
+  CLI_DISABLED=false
+  CLI_CHANGE_COUNT=0
+}
+
+parse_record_options() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --type)
+        [ "$#" -ge 2 ] || die '--type requires TYPE'
+        CLI_TYPE=$(record_type_id "$2")
+        CLI_TYPE_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --name)
+        [ "$#" -ge 2 ] || die '--name requires NAME'
+        validate_record_name "$2"
+        CLI_NAME=$2
+        [ "$CLI_NAME" = @ ] && CLI_NAME=
+        CLI_NAME_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --value)
+        [ "$#" -ge 2 ] || die '--value requires VALUE'
+        [ -n "$2" ] || die '--value must not be empty'
+        CLI_VALUE=$2
+        CLI_VALUE_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --ttl)
+        [ "$#" -ge 2 ] || die '--ttl requires SECONDS'
+        validate_positive_integer ttl "$2" 2147483647
+        CLI_TTL=$2
+        CLI_TTL_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --priority|--weight|--port)
+        [ "$#" -ge 2 ] || die "$1 requires an integer"
+        db_option_name=${1#--}
+        validate_nonnegative_integer "$db_option_name" "$2" 2147483647
+        case "$1" in
+          --priority) CLI_PRIORITY=$2; CLI_PRIORITY_SET=true ;;
+          --weight) CLI_WEIGHT=$2; CLI_WEIGHT_SET=true ;;
+          --port) CLI_PORT=$2; CLI_PORT_SET=true ;;
+        esac
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --flags)
+        [ "$#" -ge 2 ] || die '--flags requires an integer'
+        validate_nonnegative_integer flags "$2" 255
+        CLI_FLAGS=$2
+        CLI_FLAGS_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --tag)
+        [ "$#" -ge 2 ] || die '--tag requires TAG'
+        CLI_TAG=$2
+        CLI_TAG_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift 2
+        ;;
+      --disable)
+        CLI_DISABLED=true
+        CLI_DISABLED_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift
+        ;;
+      --enable)
+        CLI_DISABLED=false
+        CLI_DISABLED_SET=true
+        CLI_CHANGE_COUNT=$((CLI_CHANGE_COUNT + 1))
+        shift
+        ;;
+      *) die "unknown record option: $1" ;;
+    esac
+  done
+}
+
+write_add_body() {
+  db_body_path=$1
+  jq -n --argjson type "$CLI_TYPE" --argjson ttl "$CLI_TTL" \
+    --arg value "$CLI_VALUE" --arg name "$CLI_NAME" \
+    --argjson weight "$CLI_WEIGHT" --argjson priority "$CLI_PRIORITY" \
+    --argjson flags "$CLI_FLAGS" --arg tag "$CLI_TAG" \
+    --argjson port "$CLI_PORT" --argjson disabled "$CLI_DISABLED" '
+      {
+        Type: $type, Ttl: $ttl, Value: $value, Name: $name,
+        Weight: $weight, Priority: $priority, Flags: $flags,
+        Tag: $tag, Port: $port, Disabled: $disabled, Comment: ""
+      }
+    ' >"$db_body_path" || die 'cannot construct direct DNS record request'
+}
+
+write_update_body() {
+  db_record_id=$1
+  db_body_path=$2
+  jq --argjson id "$db_record_id" \
+    --arg type_set "$CLI_TYPE_SET" --argjson type "$CLI_TYPE" \
+    --arg ttl_set "$CLI_TTL_SET" --argjson ttl "$CLI_TTL" \
+    --arg name_set "$CLI_NAME_SET" --arg name "$CLI_NAME" \
+    --arg value_set "$CLI_VALUE_SET" --arg value "$CLI_VALUE" \
+    --arg weight_set "$CLI_WEIGHT_SET" --argjson weight "$CLI_WEIGHT" \
+    --arg priority_set "$CLI_PRIORITY_SET" --argjson priority "$CLI_PRIORITY" \
+    --arg flags_set "$CLI_FLAGS_SET" --argjson flags "$CLI_FLAGS" \
+    --arg tag_set "$CLI_TAG_SET" --arg tag "$CLI_TAG" \
+    --arg port_set "$CLI_PORT_SET" --argjson port "$CLI_PORT" \
+    --arg disabled_set "$CLI_DISABLED_SET" --argjson disabled "$CLI_DISABLED" '
+      .Records[] | select(.Id == $id) | {
+        Type: (if $type_set == "true" then $type else .Type end),
+        Ttl: (if $ttl_set == "true" then $ttl else (.Ttl // 60) end),
+        Value: (if $value_set == "true" then $value else (.Value // "") end),
+        Name: (if $name_set == "true" then $name else (.Name // "") end),
+        Weight: (if $weight_set == "true" then $weight else (.Weight // 0) end),
+        Priority: (if $priority_set == "true" then $priority else (.Priority // 0) end),
+        Flags: (if $flags_set == "true" then $flags else (.Flags // 0) end),
+        Tag: (if $tag_set == "true" then $tag else (.Tag // "") end),
+        Port: (if $port_set == "true" then $port else (.Port // 0) end),
+        Disabled: (if $disabled_set == "true" then $disabled else (.Disabled // false) end),
+        Comment: (.Comment // "")
+      }
+    ' "$ZONE_FILE" >"$db_body_path" || die 'cannot construct direct DNS record update'
+}
+
+validate_direct_record_conflicts() {
+  db_body_path=$1
+  db_excluded_id=$2
+  db_type=$(jq '.Type' "$db_body_path") || die 'cannot read direct DNS record type'
+  db_name=$(jq -r '.Name' "$db_body_path") || die 'cannot read direct DNS record name'
+
+  db_cname_count=$(jq --argjson type "$db_type" --arg name "$db_name" \
+    --argjson excluded "$db_excluded_id" '[
+      .Records[]?
+      | select(.Id != $excluded)
+      | select((.Name // "") == $name and (.Type == 2 or $type == 2))
+    ] | length' "$ZONE_FILE") || die 'cannot inspect CNAME exclusivity'
+  [ "$db_cname_count" -eq 0 ] || die 'CNAME exclusivity would be violated'
+
+  db_duplicate_count=$(jq --slurpfile wanted "$db_body_path" --argjson excluded "$db_excluded_id" '
+    def semantic: {
+      Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
+      Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
+      Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false)
+    };
+    ($wanted[0] | semantic) as $desired
+    | [.Records[]? | select(.Id != $excluded) | select((. | semantic) == $desired)]
+    | length
+  ' "$ZONE_FILE") || die 'cannot inspect duplicate DNS records'
+  [ "$db_duplicate_count" -eq 0 ] || die 'an identical DNS record already exists'
+}
+
+print_zone_records() {
+  jq -r '
+    def type_name: {
+      "0":"A", "1":"AAAA", "2":"CNAME", "3":"TXT", "4":"MX",
+      "8":"SRV", "9":"CAA", "10":"PTR", "12":"NS",
+      "13":"SVCB", "14":"HTTPS", "15":"TLSA"
+    }[(.Type | tostring)] // ("TYPE" + (.Type | tostring));
+    .Records
+    | sort_by(.Name // "", .Type, .Value // "")[]
+    | "id=\(.Id) \(type_name) \(if (.Name // "") == "" then "@" else .Name end) "
+      + "\(.Value // "") ttl=\(.Ttl // 0) priority=\(.Priority // 0) "
+      + "weight=\(.Weight // 0) port=\(.Port // 0) flags=\(.Flags // 0) "
+      + "tag=\(.Tag // "") disabled=\(.Disabled // false)"
+  ' "$ZONE_FILE"
+}
+
+validate_direct_body() {
+  jq -e '
+    (.Type | IN(0, 1, 2, 3, 4, 8, 9, 10, 12, 13, 14, 15))
+    and (.Ttl | type == "number" and floor == . and . > 0 and . <= 2147483647)
+    and (.Value | type == "string" and length > 0)
+    and (.Name | type == "string" and (. == "" or test("^[A-Za-z0-9_.*-]+$")))
+    and (.Weight | type == "number" and floor == . and . >= 0 and . <= 2147483647)
+    and (.Priority | type == "number" and floor == . and . >= 0 and . <= 2147483647)
+    and (.Flags | type == "number" and floor == . and . >= 0 and . <= 255)
+    and (.Tag | type == "string")
+    and (.Port | type == "number" and floor == . and . >= 0 and . <= 2147483647)
+    and (.Disabled | type == "boolean")
+    and (.Comment | type == "string")
+  ' "$1" >/dev/null || die 'direct DNS record fields are invalid'
+}
+
+canonical_direct_body() {
+  jq -Sc '
+    {
+      Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
+      Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
+      Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false),
+      Comment: (.Comment // "")
+    }
+  ' "$1"
+}
+
+canonical_zone_record() {
+  db_record_id=$1
+  jq -Sc --argjson id "$db_record_id" '
+    .Records[] | select(.Id == $id)
+    | {
+        Type, Ttl: (.Ttl // 0), Value: (.Value // ""), Name: (.Name // ""),
+        Weight: (.Weight // 0), Priority: (.Priority // 0), Flags: (.Flags // 0),
+        Tag: (.Tag // ""), Port: (.Port // 0), Disabled: (.Disabled // false),
+        Comment: (.Comment // "")
+      }
+  ' "$ZONE_FILE"
+}
+
+verify_direct_record() {
+  db_record_id=$1
+  db_body_path=$2
+  db_actual=$(canonical_zone_record "$db_record_id") || die 'cannot verify direct DNS record'
+  db_wanted=$(canonical_direct_body "$db_body_path") || die 'cannot normalize direct DNS record request'
+  [ -n "$db_actual" ] && [ "$db_actual" = "$db_wanted" ] \
+    || die "Bunny DNS record $db_record_id did not verify after the mutation"
+}
+
 cmd_validate() {
   validate_config "$1"
   say "Valid record file: $1"
@@ -551,20 +923,127 @@ cmd_check() {
 }
 
 cmd_list() {
-  prepare_online "$1"
-  jq -r '
-    def type_name: {
-      "0":"A", "1":"AAAA", "2":"CNAME", "3":"TXT", "4":"MX",
-      "8":"SRV", "9":"CAA", "10":"PTR", "12":"NS",
-      "13":"SVCB", "14":"HTTPS", "15":"TLSA"
-    }[(.Type | tostring)] // ("TYPE" + (.Type | tostring));
-    .Records
-    | sort_by(.Name // "", .Type, .Value // "")[]
-    | "\(type_name) \(if (.Name // "") == "" then "@" else .Name end) "
-      + "\(.Value // "") ttl=\(.Ttl // 0) priority=\(.Priority // 0) "
-      + "weight=\(.Weight // 0) port=\(.Port // 0) flags=\(.Flags // 0) "
-      + "tag=\(.Tag // "") disabled=\(.Disabled // false)"
-  ' "$ZONE_FILE"
+  case "$1" in
+    *.json)
+      prepare_online "$1"
+      ;;
+    *)
+      if [ -f "$1" ]; then
+        prepare_online "$1"
+      else
+        prepare_direct "$1"
+      fi
+      ;;
+  esac
+  print_zone_records
+}
+
+cmd_add() {
+  [ "$#" -ge 4 ] || die 'usage: dns_bunny.sh add ZONE TYPE NAME VALUE [OPTIONS]'
+  db_direct_zone=$1
+  reset_record_options
+  CLI_TYPE=$(record_type_id "$2")
+  CLI_TYPE_SET=true
+  validate_record_name "$3"
+  CLI_NAME=$3
+  [ "$CLI_NAME" = @ ] && CLI_NAME=
+  CLI_NAME_SET=true
+  [ -n "$4" ] || die 'VALUE must not be empty'
+  CLI_VALUE=$4
+  CLI_VALUE_SET=true
+  shift 4
+  parse_record_options "$@"
+
+  prepare_direct "$db_direct_zone"
+  db_body_path=$WORK_DIR/direct-record.json
+  write_add_body "$db_body_path"
+  validate_direct_body "$db_body_path"
+  validate_direct_record_conflicts "$db_body_path" 0
+  backup_zone
+  api_request PUT "$API_BASE/dnszone/$ZONE_ID/records" "$db_body_path" "$WORK_DIR/direct-response.json"
+  db_record_id=$(jq -r '.Id // empty' "$WORK_DIR/direct-response.json") \
+    || die 'cannot read the new Bunny DNS record identifier'
+  validate_record_id "$db_record_id"
+  fetch_zone
+  verify_direct_record "$db_record_id" "$db_body_path"
+  db_type_name=$(record_type_name "$(jq '.Type' "$db_body_path")")
+  db_name=$(jq -r 'if .Name == "" then "@" else .Name end' "$db_body_path")
+  say "Added DNS record id=$db_record_id: $db_type_name $db_name $CLI_VALUE"
+}
+
+cmd_update() {
+  [ "$#" -ge 3 ] || die 'usage: dns_bunny.sh update ZONE RECORD_ID OPTIONS'
+  db_direct_zone=$1
+  db_record_id=$2
+  validate_record_id "$db_record_id"
+  shift 2
+  reset_record_options
+  parse_record_options "$@"
+  [ "$CLI_CHANGE_COUNT" -gt 0 ] || die 'update requires at least one record option'
+
+  prepare_direct "$db_direct_zone"
+  db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
+    || die 'cannot locate the Bunny DNS record'
+  [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
+  db_current_type=$(jq --argjson id "$db_record_id" '.Records[] | select(.Id == $id) | .Type' "$ZONE_FILE") \
+    || die 'cannot read the current Bunny DNS record type'
+  record_type_name "$db_current_type" >/dev/null
+
+  db_body_path=$WORK_DIR/direct-record.json
+  write_update_body "$db_record_id" "$db_body_path"
+  validate_direct_body "$db_body_path"
+  validate_direct_record_conflicts "$db_body_path" "$db_record_id"
+  db_actual=$(canonical_zone_record "$db_record_id") || die 'cannot normalize current Bunny DNS record'
+  db_wanted=$(canonical_direct_body "$db_body_path") || die 'cannot normalize requested Bunny DNS record'
+  if [ "$db_actual" = "$db_wanted" ]; then
+    say "DNS record id=$db_record_id already has the requested values."
+    return 0
+  fi
+
+  db_current_identity=$(jq --argjson id "$db_record_id" -c \
+    '.Records[] | select(.Id == $id) | {Type, Name: (.Name // "")}' "$ZONE_FILE") \
+    || die 'cannot read current DNS record identity'
+  db_wanted_identity=$(jq -c '{Type, Name}' "$db_body_path") \
+    || die 'cannot read requested DNS record identity'
+  backup_zone
+  if [ "$db_current_identity" = "$db_wanted_identity" ]; then
+    api_request POST "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" \
+      "$db_body_path" "$WORK_DIR/direct-response.json"
+    db_new_record_id=$db_record_id
+    db_action=Updated
+  else
+    api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
+    api_request PUT "$API_BASE/dnszone/$ZONE_ID/records" "$db_body_path" "$WORK_DIR/direct-response.json"
+    db_new_record_id=$(jq -r '.Id // empty' "$WORK_DIR/direct-response.json") \
+      || die 'cannot read replacement Bunny DNS record identifier'
+    validate_record_id "$db_new_record_id"
+    db_action=Replaced
+  fi
+  fetch_zone
+  verify_direct_record "$db_new_record_id" "$db_body_path"
+  if [ "$db_action" = Replaced ]; then
+    say "Replaced DNS record id=$db_record_id with id=$db_new_record_id."
+  else
+    say "Updated DNS record id=$db_record_id."
+  fi
+}
+
+cmd_delete() {
+  [ "$#" -eq 2 ] || die 'usage: dns_bunny.sh delete ZONE RECORD_ID'
+  db_direct_zone=$1
+  db_record_id=$2
+  validate_record_id "$db_record_id"
+  prepare_direct "$db_direct_zone"
+  db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
+    || die 'cannot locate the Bunny DNS record'
+  [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
+  backup_zone
+  api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
+  fetch_zone
+  db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
+    || die 'cannot verify the DNS record deletion'
+  [ "$db_record_count" -eq 0 ] || die "Bunny DNS record $db_record_id still exists after deletion"
+  say "Deleted DNS record id=$db_record_id from $ZONE."
 }
 
 cmd_plan() {
@@ -683,6 +1162,38 @@ if [ "$#" -eq 0 ]; then
   exit 0
 fi
 
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --api-key)
+      [ "$#" -ge 2 ] || die '--api-key requires FILE'
+      API_KEY_OPTION=$2
+      shift 2
+      ;;
+    --api-key=*)
+      API_KEY_OPTION=${1#--api-key=}
+      [ -n "$API_KEY_OPTION" ] || die '--api-key requires FILE'
+      shift
+      ;;
+    --backup-dir)
+      [ "$#" -ge 2 ] || die '--backup-dir requires DIR'
+      BACKUP_DIR_OPTION=$2
+      shift 2
+      ;;
+    --backup-dir=*)
+      BACKUP_DIR_OPTION=${1#--backup-dir=}
+      [ -n "$BACKUP_DIR_OPTION" ] || die '--backup-dir requires DIR'
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *) break ;;
+  esac
+done
+
+[ "$#" -gt 0 ] || die 'a command is required after global options'
+
 command_name=$1
 shift
 
@@ -708,8 +1219,17 @@ case "$command_name" in
     cmd_check "$1"
     ;;
   list)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh list RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh list ZONE|RECORDS.json'
     cmd_list "$1"
+    ;;
+  add)
+    cmd_add "$@"
+    ;;
+  update)
+    cmd_update "$@"
+    ;;
+  delete)
+    cmd_delete "$@"
     ;;
   plan)
     [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh plan RECORDS.json'

@@ -8,8 +8,7 @@
       "key": "web-origin",
       "type": "A",
       "name": "www",
-      "value": "192.0.2.10",
-      "ttl": 300
+      "value": "192.0.2.10"
     },
     {
       "key": "site-verification",

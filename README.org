@@ -1,13 +1,13 @@
-#+TITLE: Bunny DNS Reconciler
+#+TITLE: Bunny DNS Manager and Reconciler
 
 # Filename: README.org
-# Description: Operator guide for the standalone Bunny DNS reconciler.
+# Description: Operator guide for the standalone Bunny DNS manager and reconciler.
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.4.1
-# Last-Updated: 2026-08-29
-# Update #: 3
+# Version: 0.5.1
+# Last-Updated: 2026-08-30
+# Update #: 5
 
 * Overview
 
@@ -21,10 +21,13 @@ themselves.
 
 ** Solution
 
-=dns_bunny.sh= owns a small declaration of desired records.  Each declaration
-names an =owner= and gives every record a durable =key=.  The tool stores those
-two values in the Bunny record comment, reconciles only matching records, and
-preserves every record owned by another project or by no project.
+=dns_bunny.sh= can inspect and edit one record directly from the command line,
+or own a declaration of desired records for repeatable reconciliation.  Direct
+commands identify updates and deletions by Bunny's numeric record ID.  Each
+declaration instead names an =owner= and gives every record a durable =key=.
+The tool stores those two values in the Bunny record comment, reconciles only
+matching records, and preserves every record owned by another project or by no
+project.
 
 The tool never creates or deletes a DNS zone, changes registrar delegation, or
 manages DNSSEC.  It does not read credentials from the declaration or from
@@ -32,17 +35,20 @@ command-line arguments.
 
 ** How it works
 
-1. The tool validates the declaration and normalizes record types and optional
-   fields into Bunny's API shape.
-2. It reads a protected one-line API key file and locates exactly one existing
-   zone by its domain name.
-3. It compares each desired record with the current zone using the ownership
-   comment =managed-by:OWNER; key=KEY=.
-4. It reports safe creates, updates, replacements, exact matches, or conflicts.
-5. On =apply=, it writes a protected snapshot, performs only the planned
-   changes, fetches the zone again, and requires a clean plan.
-6. On explicit =prune=, it deletes obsolete records for this declaration's
-   owner only.  Other owners and unmanaged records remain untouched.
+1. The tool reads a protected one-line API key file and locates exactly one
+   existing zone by its domain name.
+2. =list= fetches and prints that zone directly; no declaration is needed.
+3. =add=, =update=, and =delete= validate their CLI fields, write a protected
+   snapshot, perform one explicit mutation, fetch the zone again, and verify
+   the result.
+4. File-based commands validate the declaration and normalize record types and
+   optional fields into Bunny's API shape.
+5. They compare desired records with the current zone using the ownership
+   comment =managed-by:OWNER; key=KEY= and report safe creates, updates,
+   replacements, exact matches, or conflicts.
+6. =apply= writes a protected snapshot, performs only the planned changes,
+   fetches the zone again, and requires a clean plan.  Explicit =prune= deletes
+   obsolete records for this declaration's owner only.
 
 ** Quickstart
 
@@ -50,11 +56,32 @@ First run the non-mutating checks:
 
 #+begin_src sh
 ./dns_bunny.sh
+./dns_bunny.sh list ckg.re
 ./dns_bunny.sh validate records.example.json
 gmake self-check
 #+end_src
 
-Then create a project declaration and its protected key:
+The direct command above reads =$HOME/.secrets/bunnynet-api-key=.  To select a
+different protected key file, put the global option before the command:
+
+#+begin_src sh
+./dns_bunny.sh --api-key /absolute/path/to/bunny-api-key list ckg.re
+#+end_src
+
+For a one-off record, use the numeric IDs printed by =list= for later edits:
+
+#+begin_src sh
+./dns_bunny.sh add ckg.re A www 192.0.2.10
+./dns_bunny.sh update ckg.re 123456 --value 192.0.2.11
+./dns_bunny.sh delete ckg.re 123456
+#+end_src
+
+Each direct mutation first writes a protected snapshot under
+=$HOME/.local/state/dns-bunny/backups=.  Review the snapshot path printed by the
+command.  Use =--backup-dir /absolute/path= before the command to override it.
+
+For repeatable or scripted reconciliation, create a project declaration and
+its protected key:
 
 #+begin_src sh
 cp records.example.json records.json
@@ -78,8 +105,8 @@ Review the complete plan.  The first DNS mutation is explicit:
   filter and reports the version floor before reading a declaration.
 - macOS, Linux, or SmartOS for direct execution.  Key-file mode inspection is
   selected for Darwin, Linux, and SunOS.
-- Network access to =https://api.bunny.net= for commands other than =help=,
-  =version=, and =validate=.
+- Network access to =https://api.bunny.net= for =check=, =list=, =add=,
+  =update=, =delete=, =plan=, =apply=, =verify=, and =prune=.
 - GNU Make for project checks and installation.  Invoke =gmake= on SmartOS.
 - Optional =shellcheck= and either =mandoc= or =nroff= for fuller local checks.
 
@@ -99,7 +126,7 @@ are:
 Every record requires a unique lowercase =key=, a =type=, a zone-relative
 =name=, and a non-empty =value=.  Use =@= or an empty string for the zone apex.
 Optional fields are =ttl=, =priority=, =weight=, =port=, =flags=, =tag=,
-=disabled=, and =allow_multiple=.  TTL defaults to 300 seconds and numeric
+=disabled=, and =allow_multiple=.  TTL defaults to 60 seconds and numeric
 routing fields default to zero.
 
 Supported standard record types are =A=, =AAAA=, =CNAME=, =TXT=, =MX=, =SRV=,
@@ -116,7 +143,11 @@ exclusivity.
 - =validate=: check the local JSON without reading the key or using the network.
 - =check=: verify dependencies, key protection, API access, owner, and exact
   zone lookup.
-- =list=: show current public record values and routing fields.
+- =list ZONE=: show every current record and its numeric ID without requiring a
+  declaration.  =list RECORDS.json= remains available for existing scripts.
+- =add ZONE TYPE NAME VALUE=: create one record from CLI fields.
+- =update ZONE RECORD_ID OPTIONS=: change only the named fields of one record.
+- =delete ZONE RECORD_ID=: delete exactly one record by its numeric ID.
 - =plan=: show =OK=, =CREATE=, =UPDATE=, =REPLACE=, or =CONFLICT= for every
   declared record.
 - =apply=: back up the zone, apply a conflict-free plan, and verify the result.
@@ -126,6 +157,26 @@ exclusivity.
 
 With no arguments, the program prints its version and usage, exits
 successfully, and has no side effects.
+
+Global options go before the command.  =--api-key FILE= selects an absolute
+protected API-key file.  =--backup-dir DIR= selects an absolute directory for
+direct-mutation snapshots and also overrides a declaration's =backup_dir= for
+that invocation.
+
+The direct =add= command accepts =--ttl=, =--priority=, =--weight=, =--port=,
+=--flags=, =--tag=, =--disable=, and =--enable=.  =update= also accepts
+=--type=, =--name=, and =--value=.  Use =@= for the apex.  The supported record
+types and field limits are the same as in a JSON declaration.
+
+=update= and =delete= use the exact numeric ID printed by =list=.  This is
+intentional: a name and type are not unique because DNS record sets commonly
+contain several values.  A name or type change uses a backed-up
+delete-then-create replacement and may receive a new ID.
+
+Direct commands act on the selected ID even when its comment marks it as owned
+by a JSON declaration.  =update= preserves that comment, so the next =plan=
+will report and can reverse a value changed outside the declaration.  A later
+=apply= can recreate a directly deleted declared record.
 
 * Ownership and project isolation
 
@@ -169,6 +220,11 @@ normal exit and on handled HUP, INT, or TERM signals.  SIGKILL cannot run shell
 cleanup; after such a termination, a mode-0700 =dns_bunny.*= directory with
 mode-0600 request files may remain under =TMPDIR=.
 
+Direct commands default to =$HOME/.secrets/bunnynet-api-key=.  The global
+=--api-key /absolute/path= option selects a different file.  Despite its short
+name, this option takes a path, never the secret value, so the credential does
+not enter shell history or process arguments.
+
 On the SCS workstation, the existing Bunny API key can be found at
 =~/.secrets/bunnynet-api-key=.  The file was verified as a regular,
 non-symbolic mode-0600 file on 2026-08-29.  JSON does not expand =~=, so an SCS
@@ -181,9 +237,11 @@ project declaration must use the full path:
 Do not commit the key.  Keep it on the trusted operator machine and do not copy
 it to a public application server.
 
-Before any =apply= mutation or =prune= deletion, the full current zone document
-is saved below =backup_dir=.  The directory is mode 0700 and each snapshot is
-mode 0600.  A same-second filename collision is refused rather than overwritten.
+Before any =add=, =update=, =delete=, =apply=, or =prune= mutation, the full
+current zone document is saved.  Direct commands default to
+=$HOME/.local/state/dns-bunny/backups=; declarations use =backup_dir=.  The
+directory is mode 0700 and each snapshot is mode 0600.  Timestamp and process
+ID are included in the filename, and an existing name is never overwritten.
 API mutations are sequential and are not rolled back automatically after a
 later request fails; use the snapshot to inspect and recover a partial run.
 
@@ -247,11 +305,11 @@ Run:
 gmake self-check
 #+end_src
 
-The offline suite uses a stateful fake Bunny API.  It exercises validation,
-planning, fail-closed plan construction, adoption, creation, identity
-replacement, verification, owner-isolated pruning, protected backups, lookup
-failures, the jq feature floor, and Darwin/Linux/SunOS key-mode branches
-without using a real account.
+The offline suite uses a stateful fake Bunny API.  It exercises direct listing,
+adding, partial updating, identity replacement, deletion, JSON validation,
+planning, fail-closed plan construction, adoption, reconciliation,
+owner-isolated pruning, protected backups, lookup failures, the jq feature
+floor, and Darwin/Linux/SunOS key-mode branches without using a real account.
 
 The project also checks staged install and uninstall behavior during release
 verification.  A live Bunny API call is intentionally not part of the offline
