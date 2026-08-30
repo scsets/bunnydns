@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.2
+# Version: 0.5.3
 # Last-Updated: 2026-08-30
-# Update #: 6
+# Update #: 7
 
 * Overview
 
@@ -145,8 +145,9 @@ exclusivity.
   zone lookup.
 - =list ZONE=: show every current record and its numeric ID without requiring a
   declaration.  A local file with the same name never changes this meaning.
-- =list --declaration RECORDS.json=: use the zone and key-file settings from an
-  explicit declaration.
+- =list --records-file RECORDS.json=: read the zone and API-key-file location
+  from that JSON records file, then show every current record in the zone—not
+  only the records described by the file.
 - =add ZONE TYPE NAME VALUE=: create one record from CLI fields.
 - =update ZONE RECORD_ID OPTIONS=: change only the named fields of one record.
 - =delete ZONE RECORD_ID=: delete exactly one record by its numeric ID.

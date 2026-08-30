@@ -5,16 +5,16 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.5.2
+# Version: 0.5.3
 # Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 10
+# Update #: 11
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.5.2
+VERSION=0.5.3
 API_BASE=https://api.bunny.net
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
@@ -45,7 +45,7 @@ Usage:
   dns_bunny.sh help
   dns_bunny.sh version
   dns_bunny.sh [--api-key FILE] list ZONE
-  dns_bunny.sh [--api-key FILE] list --declaration RECORDS.json
+  dns_bunny.sh [--api-key FILE] list --records-file RECORDS.json
   dns_bunny.sh [--api-key FILE] [--backup-dir DIR] add ZONE TYPE NAME VALUE [OPTIONS]
   dns_bunny.sh [--api-key FILE] [--backup-dir DIR] update ZONE RECORD_ID OPTIONS
   dns_bunny.sh [--api-key FILE] [--backup-dir DIR] delete ZONE RECORD_ID
@@ -66,7 +66,8 @@ Record OPTIONS are --ttl, --type, --name, --value, --priority, --weight,
 VALUE positionally; update accepts only the fields that should change. TTL
 defaults to 60 seconds when omitted.
 
-List takes a zone name. Use list --declaration for a RECORDS.json file.
+List takes a zone name. Use list --records-file to read the zone and API-key
+file location from a RECORDS.json file; every current zone record is listed.
 With no command, nothing changes. Mutations require add, update, delete,
 apply, prune, or init-key. --api-key names a file; it never accepts the secret.
 EOF
@@ -985,11 +986,11 @@ cmd_list() {
       prepare_direct "$1"
       ;;
     2)
-      [ "$1" = --declaration ] \
-        || die 'usage: dns_bunny.sh list ZONE|--declaration RECORDS.json'
+      [ "$1" = --records-file ] \
+        || die 'usage: dns_bunny.sh list ZONE|--records-file RECORDS.json'
       prepare_online "$2"
       ;;
-    *) die 'usage: dns_bunny.sh list ZONE|--declaration RECORDS.json' ;;
+    *) die 'usage: dns_bunny.sh list ZONE|--records-file RECORDS.json' ;;
   esac
   print_zone_records
 }

@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.5.2
+.\" Version: 0.5.3
 .\" Last-Updated: 2026-08-30 Sun 00:00
-.\" Update #: 10
-.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.2" "SCS Commands"
+.\" Update #: 11
+.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.3" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .SH SYNOPSIS
@@ -25,7 +25,7 @@ dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .br
 .B dns_bunny.sh
 .RI [ "global-options" ]
-.B list --declaration
+.B list --records-file
 .I records.json
 .br
 .B dns_bunny.sh
@@ -111,9 +111,11 @@ without comments or credentials.
 No JSON declaration is required.
 A local file with the same name does not change the zone interpretation.
 Pass
-.B list --declaration
+.B list --records-file
 .I records.json
-to use an explicit declaration instead.
+to read the zone and API-key-file location from that JSON records file.
+The command still prints every current record in the zone, not only records
+described by the file.
 This command is read-only.
 .TP
 .BI add " zone type name value " "[record-options]"

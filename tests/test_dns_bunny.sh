@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.2
+# Version: 0.5.3
 # Last-Updated: 2026-08-30
-# Update #: 4
+# Update #: 5
 
 set -u
 LC_ALL=C
@@ -182,10 +182,10 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.5.2' 'usage reports the program version'
+expect_output 'dns_bunny.sh 0.5.3' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.5.2' 'version command is exact'
+expect_output 'dns_bunny.sh 0.5.3' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -264,9 +264,9 @@ expect_status 0 'verify accepts the converged declaration' env \
   "$db_program" verify "$db_config_file"
 expect_output 'All declared DNS records match Bunny.' 'verify reports a clean declaration'
 
-expect_status 0 'explicit declaration listing succeeds against the offline API' env \
+expect_status 0 'records-file listing succeeds against the offline API' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
-  "$db_program" list --declaration "$db_config_file"
+  "$db_program" list --records-file "$db_config_file"
 expect_output 'A api 192.0.2.11' 'list shows public record data'
 expect_output 'id=104' 'list exposes stable record IDs for direct editing'
 db_checks=$((db_checks + 1))
@@ -274,6 +274,11 @@ case "$db_command_output" in
   *managed-by:*|*test-bunny-api-key*) record_failure 'list exposed ownership or credential data' ;;
   *) record_success 'list omits ownership and credential data' ;;
 esac
+
+expect_status 1 'the former declaration flag is rejected' \
+  "$db_program" list --declaration "$db_config_file"
+expect_output 'list ZONE|--records-file RECORDS.json' \
+  'the rejection points to the renamed records-file flag'
 
 db_direct_home=$db_test_root/direct-home
 mkdir -p "$db_direct_home/.secrets" || exit 1
