@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
-// Filename: mock_dns_bunny_node.mjs
+// Filename: mock_bunnydns_node.mjs
 // Description: Stateful Bunny API helper replacement for offline behavior tests.
 // Author: SCS
 // Copyright (C) 2026, SCS, all rights reserved.
 // Created: 2026-08-30 Sun 00:00
-// Version: 0.6.0
-// Last-Updated: 2026-08-30 Sun 00:00
-// Update #: 0
+// Version: 0.7.0
+// Last-Updated: 2026-08-31 Mon 00:00
+// Update #: 1
 
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";

@@ -1,0 +1,277 @@
+.\" Filename: bunnydns.1
+.\" Description: Manual page for bunnydns.
+.\" Author: SCS
+.\" Copyright (C) 2026, SCS, all rights reserved.
+.\" Created: 2026-08-18 Tue 00:00
+.\" Version: 0.7.0
+.\" Last-Updated: 2026-08-31 Mon 00:00
+.\" Update #: 17
+.TH BUNNYDNS 1 "2026-08-31" "bunnydns 0.7.0" "SCS Commands"
+.SH NAME
+bunnydns \- inspect, edit, and reconcile Bunny DNS records
+.SH SYNOPSIS
+.B bunnydns
+.br
+.B bunnydns
+.BR help | version
+.br
+.B bunnydns init-key
+.I keyfile
+.br
+.B bunnydns
+.RI [ global-options ]
+.B list
+.I zone
+.br
+.B bunnydns
+.RI [ global-options ]
+.B list --records-file
+.I records.json
+.br
+.B bunnydns
+.RI [ global-options ]
+.B add
+.I zone type name value
+.RI [ record-options ]
+.br
+.B bunnydns
+.RI [ global-options ]
+.B update
+.I zone record-id record-options
+.br
+.B bunnydns
+.RI [ global-options ]
+.B delete
+.I zone record-id
+.br
+.B bunnydns
+.RI [ global-options ]
+.BR validate | check | plan | apply | verify | prune
+.I records.json
+.SH DESCRIPTION
+.B bunnydns
+edits individual records or reconciles project-owned records from a JSON file.
+It operates on an existing Bunny DNS zone and preserves unrelated records.
+.PP
+With no arguments, it prints version and usage, exits successfully, and
+changes nothing.
+.SH GLOBAL OPTIONS
+Global options must appear before the command.
+.TP
+.BI --api-key " file"
+Use this absolute protected key-file path.
+Direct commands default to
+.IR $HOME/.secrets/bunnynet-api-key .
+.TP
+.BI --backup-dir " directory"
+Use this absolute pre-change snapshot directory.
+Direct changes default to
+.IR $HOME/.local/state/bunnydns/backups .
+.SH COMMANDS
+.TP
+.B help
+Print usage.
+.TP
+.B version
+Print the release version.
+.TP
+.BI init-key " keyfile"
+Prompt through the controlling terminal and create a new mode-0600 key file.
+An existing file is never overwritten.
+.TP
+.BI validate " records.json"
+Validate local JSON without reading the key or using the network.
+.TP
+.BI check " records.json"
+Validate dependencies, key protection, API access, owner, and exact zone
+lookup.  This command is read-only.
+.TP
+.BI list " zone"
+Print every record and numeric record ID.  This command is read-only.
+.TP
+.BI "list --records-file" " records.json"
+Read the zone and key-file path from the JSON file, then list every zone
+record.  This command is read-only.
+.TP
+.BI add " zone type name value " "[record-options]"
+Write a snapshot, create one record, fetch the zone, and verify the submitted
+fields.
+.TP
+.BI update " zone record-id record-options"
+Write a snapshot and change only the named fields.  A name or type change uses
+delete-then-create and may assign a new record ID.
+.TP
+.BI delete " zone record-id"
+Write a snapshot, delete the exact numeric ID, verify its absence, and print
+the deleted record.
+.TP
+.BI plan " records.json"
+Print OK, CREATE, UPDATE, REPLACE, or CONFLICT for each declared record.
+This command is read-only.
+.TP
+.BI apply " records.json"
+Back up the zone, apply a conflict-free plan, fetch the zone, and require a
+clean verified plan.
+.TP
+.BI verify " records.json"
+Require every declared record to match.  This command is read-only.
+.TP
+.BI prune " records.json"
+After verification, delete only obsolete records owned by this declaration.
+.SH RECORD OPTIONS
+.B add
+accepts
+.BR --ttl ,
+.BR --priority ,
+.BR --weight ,
+.BR --port ,
+.BR --flags ,
+.BR --tag ,
+.BR --disable ,
+and
+.BR --enable .
+.PP
+.B update
+also accepts
+.BR --type ,
+.BR --name ,
+and
+.BR --value .
+Use
+.B @
+for the zone apex.
+TTL defaults to 60; numeric routing fields default to zero.
+.PP
+Supported types are A, AAAA, CNAME, TXT, MX, SRV, CAA, PTR, NS, SVCB,
+HTTPS, and TLSA.
+.SH RECORDS FILE
+The top-level JSON object contains:
+.TP
+.B owner
+Stable lowercase project namespace, up to 64 characters.
+.TP
+.B zone
+Existing Bunny DNS zone name.
+.TP
+.B key_file
+Absolute protected API key-file path.
+.TP
+.B backup_dir
+Absolute pre-change snapshot directory.
+.TP
+.B records
+Desired record array.  An empty array is valid.
+.PP
+Each record requires a unique lowercase
+.BR key ,
+.BR type ,
+.BR name ,
+and non-empty
+.BR value .
+Optional fields are
+.BR ttl ,
+.BR priority ,
+.BR weight ,
+.BR port ,
+.BR flags ,
+.BR tag ,
+.BR disabled ,
+and
+.BR allow_multiple .
+.SH OWNERSHIP
+Declarative records use this Bunny comment:
+.PP
+.RS
+managed-by:OWNER; key=KEY
+.RE
+.PP
+The owner isolates projects sharing a zone.  The key identifies a record
+across value and TTL changes.  Duplicate ownership comments, ambiguous
+unmanaged matches, and CNAME conflicts stop the plan.
+.PP
+.B prune
+only deletes records with this declaration's owner prefix.  Do not run another
+writer against the same zone during
+.B apply
+or
+.BR prune .
+.SH API KEY
+The key file must be regular, non-symbolic, mode 0400 or 0600, and contain
+exactly one printable ASCII line without leading or trailing spaces.
+The secret is not placed in an environment variable or process argument.
+Only the key-file path is passed to the internal Node helper.
+.SH BACKUPS
+Before add, update, delete, apply, or prune, the current zone document is saved
+to a mode-0600 file in a mode-0700 directory.  Changes are sequential and are
+not rolled back automatically; retain the snapshot for recovery.
+.SH INSTALLATION
+Prepare dependencies and install:
+.PP
+.RS
+npm ci --ignore-scripts
+.br
+gmake install
+.RE
+.PP
+On macOS the command is installed under
+.IR $HOME/bin ,
+the runtime under
+.IR $HOME/libexec/bunnydns ,
+and the manual under
+.IR $HOME/share/man/man1 .
+.PP
+SmartOS global-zone defaults are below
+.IR /opt/custom .
+SmartOS native-zone defaults are below
+.IR /opt/local .
+Use
+.B gmake
+on SmartOS.
+.PP
+.B gmake update
+compares fresh MD5 digests and the installed runtime.  Identical content is
+left untouched; differing content is uninstalled and installed sequentially.
+Absolute BINDIR, LIBEXECDIR, MANDIR, and DESTDIR overrides are supported.
+.SH PORTABILITY
+Requires POSIX shell utilities, jq 1.6 or newer, Node.js 18 or newer, npm, and
+Bunny's pinned official OpenAPI client.  GNU Make and an MD5 tool are required
+for project checks and installation.
+.SH FILES
+.TP
+.I $HOME/.secrets/bunnynet-api-key
+Default direct-command key file.
+.TP
+.I $HOME/.local/state/bunnydns/backups
+Default direct-command snapshot directory.
+.TP
+.I records.example.json
+Copyable declarative schema example.
+.TP
+.I bunnydns.md5
+Source-tree command checksum sidecar.
+.TP
+.I bunnydns-node.mjs.md5
+Source-tree helper checksum sidecar.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Usage, validation, dependency, permission, API, conflict, or verification
+failure.
+.TP
+.B 130
+Handled HUP, INT, or TERM signal.
+.SH SEE ALSO
+.BR jq (1),
+.BR node (1),
+.BR npm (1)
+.PP
+Bunny API authentication:
+.br
+https://docs.bunny.net/api-reference/authentication
+.PP
+Bunny DNS record API:
+.br
+https://docs.bunny.net/reference/dnszonepublic_addrecord

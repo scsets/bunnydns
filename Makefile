@@ -3,18 +3,18 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.6.0
-# Last-Updated: 2026-08-30
-# Update #: 10
+# Version: 0.7.0
+# Last-Updated: 2026-08-31
+# Update #: 11
 
 SHELL = /bin/sh
 
 NODE ?= $(shell if command -v node >/dev/null 2>&1; then command -v node; elif [ -x /opt/tools/bin/node ]; then printf '%s\n' /opt/tools/bin/node; elif [ -x /opt/local/bin/node ]; then printf '%s\n' /opt/local/bin/node; fi)
 NPM ?= $(shell if command -v npm >/dev/null 2>&1; then command -v npm; elif [ -x /opt/tools/bin/npm ]; then printf '%s\n' /opt/tools/bin/npm; elif [ -x /opt/local/bin/npm ]; then printf '%s\n' /opt/local/bin/npm; fi)
 
-PROGRAM = dns_bunny.sh
-HELPER = dns_bunny_node.mjs
-MANPAGE = dns_bunny.1
+PROGRAM = bunnydns
+HELPER = bunnydns-node.mjs
+MANPAGE = bunnydns.1
 CHECKSUM = $(PROGRAM).md5
 HELPER_CHECKSUM = $(HELPER).md5
 RUNTIME_PACKAGE = package.json
@@ -81,13 +81,13 @@ check: checksum-check ## Check syntax, style, checksum, and the example declarat
 	@'$(NODE)' --check $(HELPER)
 	@'$(NODE)' $(HELPER) runtime-check >/dev/null
 	@'$(NPM)' ls --all --omit=dev >/dev/null
-	@'$(NODE)' -e 'const p = require("./package.json"); const l = require("./package-lock.json"); if (p.version !== "0.6.0" || l.packages[""].version !== p.version || p.dependencies["@bunny.net/openapi-client"] !== "0.3.0") process.exit(1)'
+	@'$(NODE)' -e 'const p = require("./package.json"); const l = require("./package-lock.json"); if (p.version !== "0.7.0" || l.packages[""].version !== p.version || p.dependencies["@bunny.net/openapi-client"] !== "0.3.0") process.exit(1)'
 	@if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh $(PROGRAM) tests/*.sh; \
 	else printf '%s\n' 'shellcheck not found; style check skipped.'; fi
 	@./$(PROGRAM) validate records.example.json
 
 test: require-gnu-make ## Run the offline behavior tests.
-	@./tests/test_dns_bunny.sh
+	@./tests/test_bunnydns.sh
 	@./tests/test_makefile.sh
 
 self-check: check test man-check ## Run every project verification.
@@ -113,7 +113,7 @@ show-install-paths: require-gnu-make ## Show resolved executable and manual dest
 	         [ -n "$$mandir" ] || mandir=$$smartos_prefix/share/man/man1 ;; \
 	  *) printf 'Unsupported operating system: %s\n' "$$os_name" >&2; exit 1 ;; \
 	esac; \
-	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/dns-bunny; \
+	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/bunnydns; \
 	case "$$bindir" in /*) ;; *) printf '%s\n' 'BINDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$mandir" in /*) ;; *) printf '%s\n' 'MANDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$libexecdir" in /*) ;; *) printf '%s\n' 'LIBEXECDIR must be absolute.' >&2; exit 1 ;; esac; \
@@ -135,7 +135,7 @@ install: check man-check ## Install the executable, official-client runtime, and
 	         [ -n "$$mandir" ] || mandir=$$smartos_prefix/share/man/man1 ;; \
 	  *) printf 'Unsupported operating system: %s\n' "$$os_name" >&2; exit 1 ;; \
 	esac; \
-	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/dns-bunny; \
+	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/bunnydns; \
 	case "$$bindir" in /*) ;; *) printf '%s\n' 'BINDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$mandir" in /*) ;; *) printf '%s\n' 'MANDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$libexecdir" in /*) ;; *) printf '%s\n' 'LIBEXECDIR must be absolute.' >&2; exit 1 ;; esac; \
@@ -175,7 +175,7 @@ uninstall: require-gnu-make ## Remove only files and packages installed by this 
 	         [ -n "$$mandir" ] || mandir=$$smartos_prefix/share/man/man1 ;; \
 	  *) printf 'Unsupported operating system: %s\n' "$$os_name" >&2; exit 1 ;; \
 	esac; \
-	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/dns-bunny; \
+	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/bunnydns; \
 	case "$$bindir" in /*) ;; *) printf '%s\n' 'BINDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$mandir" in /*) ;; *) printf '%s\n' 'MANDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$libexecdir" in /*) ;; *) printf '%s\n' 'LIBEXECDIR must be absolute.' >&2; exit 1 ;; esac; \
@@ -198,7 +198,7 @@ update: check man-check ## Replace a differing installation; skip identical appl
 	         [ -n "$$bindir" ] || bindir=$$smartos_prefix/bin ;; \
 	  *) printf 'Unsupported operating system: %s\n' "$$os_name" >&2; exit 1 ;; \
 	esac; \
-	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/dns-bunny; \
+	[ -n "$$libexecdir" ] || libexecdir=`dirname "$$bindir"`/libexec/bunnydns; \
 	case "$$bindir" in /*) ;; *) printf '%s\n' 'BINDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$libexecdir" in /*) ;; *) printf '%s\n' 'LIBEXECDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$destdir" in ''|/*) ;; *) printf '%s\n' 'DESTDIR must be empty or absolute.' >&2; exit 1 ;; esac; \

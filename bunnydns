@@ -1,20 +1,20 @@
 #!/bin/sh
 
-# Filename: dns_bunny.sh
+# Filename: bunnydns
 # Description: Inspect, edit, and reconcile Bunny DNS records.
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.6.0
-# Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 17
+# Version: 0.7.0
+# Last-Updated: 2026-08-31 Mon 00:00
+# Update #: 18
 
 set -u
 LC_ALL=C
 export LC_ALL
 
-PROGRAM=dns_bunny.sh
-VERSION=0.6.0
+PROGRAM=bunnydns
+VERSION=0.7.0
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
 WORK_DIR=
@@ -43,25 +43,25 @@ usage() {
 Inspect, edit, or reconcile records in an existing Bunny DNS zone.
 
 Usage:
-  dns_bunny.sh
-  dns_bunny.sh help
-  dns_bunny.sh version
-  dns_bunny.sh [--api-key FILE] list ZONE
-  dns_bunny.sh [--api-key FILE] list --records-file RECORDS.json
-  dns_bunny.sh [--api-key FILE] [--backup-dir DIR] add ZONE TYPE NAME VALUE [OPTIONS]
-  dns_bunny.sh [--api-key FILE] [--backup-dir DIR] update ZONE RECORD_ID OPTIONS
-  dns_bunny.sh [--api-key FILE] [--backup-dir DIR] delete ZONE RECORD_ID
-  dns_bunny.sh init-key KEYFILE
-  dns_bunny.sh validate RECORDS.json
-  dns_bunny.sh check RECORDS.json
-  dns_bunny.sh plan RECORDS.json
-  dns_bunny.sh apply RECORDS.json
-  dns_bunny.sh verify RECORDS.json
-  dns_bunny.sh prune RECORDS.json
+  bunnydns
+  bunnydns help
+  bunnydns version
+  bunnydns [--api-key FILE] list ZONE
+  bunnydns [--api-key FILE] list --records-file RECORDS.json
+  bunnydns [--api-key FILE] [--backup-dir DIR] add ZONE TYPE NAME VALUE [OPTIONS]
+  bunnydns [--api-key FILE] [--backup-dir DIR] update ZONE RECORD_ID OPTIONS
+  bunnydns [--api-key FILE] [--backup-dir DIR] delete ZONE RECORD_ID
+  bunnydns init-key KEYFILE
+  bunnydns validate RECORDS.json
+  bunnydns check RECORDS.json
+  bunnydns plan RECORDS.json
+  bunnydns apply RECORDS.json
+  bunnydns verify RECORDS.json
+  bunnydns prune RECORDS.json
 
 Global options must precede the command:
   --api-key FILE    Protected key file (default: $HOME/.secrets/bunnynet-api-key)
-  --backup-dir DIR  Backups before direct changes (default: $HOME/.local/state/dns-bunny/backups)
+  --backup-dir DIR  Backups before direct changes (default: $HOME/.local/state/bunnydns/backups)
 
 Record OPTIONS are --ttl, --type, --name, --value, --priority, --weight,
 --port, --flags, --tag, --disable, and --enable. Add takes TYPE, NAME, and
@@ -95,7 +95,7 @@ cleanup() {
   fi
   if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
     case "$WORK_DIR" in
-      "$TEMP_ROOT"/dns_bunny.*) rm -rf "$WORK_DIR" ;;
+      "$TEMP_ROOT"/bunnydns.*) rm -rf "$WORK_DIR" ;;
       *) warn "refusing to remove unexpected temporary path: $WORK_DIR" ;;
     esac
   fi
@@ -103,7 +103,7 @@ cleanup() {
 
 make_work_dir() {
   [ -n "$WORK_DIR" ] && return 0
-  WORK_DIR=$(mktemp -d "$TEMP_ROOT/dns_bunny.XXXXXX") || die "cannot create a temporary directory"
+  WORK_DIR=$(mktemp -d "$TEMP_ROOT/bunnydns.XXXXXX") || die "cannot create a temporary directory"
   chmod 700 "$WORK_DIR" || die "cannot protect temporary directory"
   trap 'cleanup' 0
   trap 'cleanup; exit 130' HUP INT TERM
@@ -140,7 +140,7 @@ default_api_key_file() {
 
 default_backup_dir() {
   [ -n "${HOME:-}" ] || return 1
-  printf '%s\n' "$HOME/.local/state/dns-bunny/backups"
+  printf '%s\n' "$HOME/.local/state/bunnydns/backups"
 }
 
 validate_zone_name() {
@@ -281,15 +281,15 @@ resolve_node_helper() {
   esac
   [ "$db_node_major" -ge 18 ] || die 'Node.js 18 or newer is required'
 
-  if [ -n "${DNS_BUNNY_NODE_HELPER:-}" ]; then
-    NODE_HELPER=$DNS_BUNNY_NODE_HELPER
+  if [ -n "${BUNNYDNS_NODE_HELPER:-}" ]; then
+    NODE_HELPER=$BUNNYDNS_NODE_HELPER
   else
     db_program_dir=$(unset CDPATH; cd "$(dirname "$0")" && pwd) \
       || die 'cannot locate the program directory'
-    if [ -f "$db_program_dir/dns_bunny_node.mjs" ]; then
-      NODE_HELPER=$db_program_dir/dns_bunny_node.mjs
+    if [ -f "$db_program_dir/bunnydns-node.mjs" ]; then
+      NODE_HELPER=$db_program_dir/bunnydns-node.mjs
     else
-      NODE_HELPER=$db_program_dir/../libexec/dns-bunny/dns_bunny_node.mjs
+      NODE_HELPER=$db_program_dir/../libexec/bunnydns/bunnydns-node.mjs
     fi
   fi
   case "$NODE_HELPER" in
@@ -365,7 +365,7 @@ prepare_direct() {
   fetch_zone
 }
 
-prepare_direct_mutation() {
+prepare_direct_change() {
   if [ -n "$BACKUP_DIR_OPTION" ]; then
     BACKUP_DIR=$BACKUP_DIR_OPTION
   else
@@ -1055,16 +1055,16 @@ cmd_list() {
       ;;
     2)
       [ "$1" = --records-file ] \
-        || die 'usage: dns_bunny.sh list ZONE|--records-file RECORDS.json'
+        || die 'usage: bunnydns list ZONE|--records-file RECORDS.json'
       prepare_online "$2"
       ;;
-    *) die 'usage: dns_bunny.sh list ZONE|--records-file RECORDS.json' ;;
+    *) die 'usage: bunnydns list ZONE|--records-file RECORDS.json' ;;
   esac
   print_zone_records
 }
 
 cmd_add() {
-  [ "$#" -ge 4 ] || die 'usage: dns_bunny.sh add ZONE TYPE NAME VALUE [OPTIONS]'
+  [ "$#" -ge 4 ] || die 'usage: bunnydns add ZONE TYPE NAME VALUE [OPTIONS]'
   db_direct_zone=$1
   reset_record_options
   CLI_TYPE=$(record_type_id "$2") \
@@ -1080,7 +1080,7 @@ cmd_add() {
   shift 4
   parse_record_options "$@"
 
-  prepare_direct_mutation "$db_direct_zone"
+  prepare_direct_change "$db_direct_zone"
   db_body_path=$WORK_DIR/direct-record.json
   write_add_body "$db_body_path"
   validate_direct_body "$db_body_path"
@@ -1099,7 +1099,7 @@ cmd_add() {
 }
 
 cmd_update() {
-  [ "$#" -ge 3 ] || die 'usage: dns_bunny.sh update ZONE RECORD_ID OPTIONS'
+  [ "$#" -ge 3 ] || die 'usage: bunnydns update ZONE RECORD_ID OPTIONS'
   db_direct_zone=$1
   db_record_id=$2
   validate_record_id "$db_record_id"
@@ -1108,7 +1108,7 @@ cmd_update() {
   parse_record_options "$@"
   [ "$CLI_CHANGE_COUNT" -gt 0 ] || die 'update requires at least one record option'
 
-  prepare_direct_mutation "$db_direct_zone"
+  prepare_direct_change "$db_direct_zone"
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot locate the Bunny DNS record'
   [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
@@ -1158,11 +1158,11 @@ cmd_update() {
 }
 
 cmd_delete() {
-  [ "$#" -eq 2 ] || die 'usage: dns_bunny.sh delete ZONE RECORD_ID'
+  [ "$#" -eq 2 ] || die 'usage: bunnydns delete ZONE RECORD_ID'
   db_direct_zone=$1
   db_record_id=$2
   validate_record_id "$db_record_id"
-  prepare_direct_mutation "$db_direct_zone"
+  prepare_direct_change "$db_direct_zone"
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot locate the Bunny DNS record'
   [ "$db_record_count" -eq 1 ] || die "Bunny DNS record ID $db_record_id does not exist in $ZONE"
@@ -1197,9 +1197,9 @@ cmd_apply() {
   db_creates=$(count_actions create) || die "cannot count DNS record creations"
   db_updates=$(count_actions update) || die "cannot count DNS record updates"
   db_replaces=$(count_actions replace) || die "cannot count DNS record replacements"
-  db_mutations=$((db_creates + db_updates + db_replaces))
+  db_changes=$((db_creates + db_updates + db_replaces))
 
-  if [ "$db_mutations" -eq 0 ]; then
+  if [ "$db_changes" -eq 0 ]; then
     say 'No DNS changes are required.'
     return 0
   fi
@@ -1210,7 +1210,7 @@ cmd_apply() {
   build_plan
   print_plan || die "cannot print verified DNS plan"
   verify_plan_is_clean
-  say "Applied and verified $db_mutations DNS change(s)."
+  say "Applied and verified $db_changes DNS change(s)."
 }
 
 cmd_verify() {
@@ -1346,15 +1346,15 @@ case "$command_name" in
     say "$PROGRAM $VERSION"
     ;;
   init-key)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh init-key KEYFILE'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns init-key KEYFILE'
     cmd_init_key "$1"
     ;;
   validate)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh validate RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns validate RECORDS.json'
     cmd_validate "$1"
     ;;
   check)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh check RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns check RECORDS.json'
     cmd_check "$1"
     ;;
   list)
@@ -1370,19 +1370,19 @@ case "$command_name" in
     cmd_delete "$@"
     ;;
   plan)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh plan RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns plan RECORDS.json'
     cmd_plan "$1"
     ;;
   apply)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh apply RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns apply RECORDS.json'
     cmd_apply "$1"
     ;;
   verify)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh verify RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns verify RECORDS.json'
     cmd_verify "$1"
     ;;
   prune)
-    [ "$#" -eq 1 ] || die 'usage: dns_bunny.sh prune RECORDS.json'
+    [ "$#" -eq 1 ] || die 'usage: bunnydns prune RECORDS.json'
     cmd_prune "$1"
     ;;
   *)

@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 
-// Filename: dns_bunny_node.mjs
-// Description: Call the Bunny API for dns_bunny.sh through Bunny's official client.
+// Filename: bunnydns-node.mjs
+// Description: Call the Bunny API for bunnydns through Bunny's official client.
 // Author: SCS
 // Copyright (C) 2026, SCS, all rights reserved.
 // Created: 2026-08-30 Sun 00:00
-// Version: 0.6.0
-// Last-Updated: 2026-08-30 Sun 00:00
-// Update #: 1
+// Version: 0.7.0
+// Last-Updated: 2026-08-31 Mon 00:00
+// Update #: 2
 
 import { readFile, writeFile } from "node:fs/promises";
 
-const PROGRAM = "dns_bunny_node.mjs";
-const VERSION = "0.6.0";
+const PROGRAM = "bunnydns-node.mjs";
+const VERSION = "0.7.0";
 const PAGE_SIZE = 1000;
 const REQUEST_TIMEOUT_MS = 60_000;
 

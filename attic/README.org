@@ -1,0 +1,15 @@
+#+TITLE: Attic
+
+# Filename: README.org
+# Description: Inventory of files retained outside the active bunnydns project.
+# Author: SCS
+# Copyright (C) 2026, SCS, all rights reserved.
+# Created: 2026-08-31
+# Version: 1.0.0
+# Last-Updated: 2026-08-31
+# Update #: 0
+
+* Contents
+
+- =Icon=: empty macOS Finder marker; not used by the program, installer, or
+  tests.

@@ -1,13 +1,13 @@
 #!/bin/sh
 
-# Filename: test_dns_bunny.sh
-# Description: Offline behavior and portability tests for dns_bunny.sh.
+# Filename: test_bunnydns.sh
+# Description: Offline behavior and portability tests for bunnydns.
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.6.0
-# Last-Updated: 2026-08-30
-# Update #: 10
+# Version: 0.7.0
+# Last-Updated: 2026-08-31
+# Update #: 11
 
 set -u
 LC_ALL=C
@@ -15,8 +15,8 @@ export LC_ALL
 
 db_script_dir=$(unset CDPATH; cd "$(dirname "$0")" && pwd) || exit 1
 db_project_dir=$(unset CDPATH; cd "$db_script_dir/.." && pwd) || exit 1
-db_program=$db_project_dir/dns_bunny.sh
-db_test_root=$(mktemp -d "${TMPDIR:-/tmp}/dns_bunny_tests.XXXXXX") || exit 1
+db_program=$db_project_dir/bunnydns
+db_test_root=$(mktemp -d "${TMPDIR:-/tmp}/bunnydns_tests.XXXXXX") || exit 1
 db_failures=0
 db_checks=0
 db_command_output=
@@ -24,7 +24,7 @@ db_command_status=0
 
 cleanup() {
   case "$db_test_root" in
-    "${TMPDIR:-/tmp}"/dns_bunny_tests.*) rm -rf "$db_test_root" ;;
+    "${TMPDIR:-/tmp}"/bunnydns_tests.*) rm -rf "$db_test_root" ;;
     *) printf 'Refusing to remove unexpected test path: %s\n' "$db_test_root" >&2 ;;
   esac
 }
@@ -113,8 +113,8 @@ ln -s "$db_script_dir/mock_jq.sh" "$db_mock_jq_bin/jq" || exit 1
 ln -s "$db_script_dir/mock_bad_stat.sh" "$db_bad_stat_bin/stat" || exit 1
 printf '%s\n' 'test-bunny-api-key' >"$db_key_file" || exit 1
 chmod 600 "$db_key_file" || exit 1
-DNS_BUNNY_NODE_HELPER=$db_script_dir/mock_dns_bunny_node.mjs
-export DNS_BUNNY_NODE_HELPER
+BUNNYDNS_NODE_HELPER=$db_script_dir/mock_bunnydns_node.mjs
+export BUNNYDNS_NODE_HELPER
 
 cat >"$db_state_dir/zone.json" <<'EOF'
 {
@@ -182,10 +182,10 @@ cat >"$db_config_file" <<EOF
 EOF
 
 expect_status 0 'no-argument usage is successful and read-only' "$db_program"
-expect_output 'dns_bunny.sh 0.6.0' 'usage reports the program version'
+expect_output 'bunnydns 0.7.0' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.6.0' 'version command is exact'
+expect_output 'bunnydns 0.7.0' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -275,7 +275,7 @@ case "$db_command_output" in
   *) record_success 'list omits ownership and credential data' ;;
 esac
 
-expect_status 1 'the former declaration flag is rejected' \
+expect_status 1 'the unsupported declaration flag is rejected' \
   "$db_program" list --declaration "$db_config_file"
 expect_output 'list ZONE|--records-file RECORDS.json' \
   'the rejection points to the renamed records-file flag'
