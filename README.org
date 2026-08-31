@@ -7,7 +7,7 @@
 # Created: 2026-08-29
 # Version: 0.7.0
 # Last-Updated: 2026-08-31
-# Update #: 14
+# Update #: 15
 
 * Overview
 
@@ -74,6 +74,33 @@ For repeatable reconciliation:
   ./bunnydns apply records.json
   ./bunnydns verify records.json
 #+end_src
+
+* Why this script?
+
+The [[https://github.com/BunnyWay/cli][official bunny.net CLI]] is the better
+general-purpose tool for interactive Bunny operations, including DNS.
+=bunnydns= does not replace it.  It handles one narrower job: safely
+reconciling one project's records in a zone that also contains records
+maintained by other projects or by hand.
+
+Driving the official CLI from a wrapper could provide the same workflow, but
+the wrapper would still have to implement and test these policies:
+
+- Desired records live in one JSON file, with separate =plan=, =apply=, and
+  =verify= stages.
+- =managed-by:OWNER; key=KEY= gives each project-owned record a stable identity
+  across value and TTL changes.
+- =prune= removes only obsolete records owned by that project; it leaves other
+  projects' and manually maintained records alone.
+- Every write is preceded by a protected zone snapshot and followed by a fresh
+  read and verification.
+- The API key is read from a protected, non-symbolic file rather than from a
+  command argument or environment variable.
+
+The advantage is therefore the maintained policy layer, not another way to
+call Bunny's API.  =bunnydns= uses Bunny's official OpenAPI client underneath.
+If the official CLI gains equivalent ownership-aware reconciliation and
+verification, using it directly would be simpler.
 
 * Requirements
 
