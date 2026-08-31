@@ -7,7 +7,7 @@
 # Created: 2026-08-29
 # Version: 0.7.0
 # Last-Updated: 2026-08-31
-# Update #: 13
+# Update #: 14
 
 * Overview
 
@@ -44,7 +44,8 @@ to another owner.
 Install dependencies and run the read-only checks:
 
 #+begin_src sh
-npm ci --ignore-scripts
+gmake dependencies-status
+gmake dependencies
 ./bunnydns
 gmake self-check
 ./bunnydns list example.com
@@ -60,18 +61,18 @@ that file safely:
 The first direct change is explicit:
 
 #+begin_src sh
-./bunnydns add example.com A www 192.0.2.10
+  ./bunnydns add example.com A www 192.0.2.10
 #+end_src
 
 For repeatable reconciliation:
 
 #+begin_src sh
-cp records.example.json records.json
-# Edit owner, zone, key_file, backup_dir, and records.
-./bunnydns check records.json
-./bunnydns plan records.json
-./bunnydns apply records.json
-./bunnydns verify records.json
+  cp records.example.json records.json
+  # Edit owner, zone, key_file, backup_dir, and records.
+  ./bunnydns check records.json
+  ./bunnydns plan records.json
+  ./bunnydns apply records.json
+  ./bunnydns verify records.json
 #+end_src
 
 * Requirements
@@ -79,14 +80,25 @@ cp records.example.json records.json
 - POSIX =/bin/sh=, =stat=, =mktemp=, and ordinary POSIX utilities.
 - jq 1.6 or newer.
 - Node.js 18 or newer and npm.
-- GNU Make for checks and installation; use =gmake= on SmartOS.
+- GNU Make is the bootstrap requirement for checks, dependency management,
+  and installation; use =gmake= on SmartOS.
 - An MD5 tool: =md5=, =md5sum=, =digest=, or =openssl=.
 - Network access to =https://api.bunny.net= for online commands.
 
-On a fresh SmartOS native zone:
+On a fresh SmartOS zone, install GNU Make once, then let the project manage
+the rest of its toolchain.  pkgsrc lives under =/opt/tools= in the global zone
+and =/opt/local= in a native zone:
 
 #+begin_src sh
-pkgin install nodejs jq gmake
+# Global zone
+/opt/tools/bin/pkgin -y update
+/opt/tools/bin/pkgin -y install gmake
+/opt/tools/bin/gmake dependencies
+
+# Native zone
+/opt/local/bin/pkgin -y update
+/opt/local/bin/pkgin -y install gmake
+/opt/local/bin/gmake dependencies
 #+end_src
 
 * Installation
@@ -95,18 +107,19 @@ The workstation command is =bunnydns=.  The Node helper and packages are
 internal runtime files.
 
 #+begin_src sh
-npm ci --ignore-scripts
-gmake show-install-paths
-gmake install
+  gmake dependencies
+  gmake show-install-paths
+  gmake install
 #+end_src
 
 Default locations:
 
-| Platform              | Command                 | Runtime                         | Manual                         |
-|-----------------------+-------------------------+---------------------------------+--------------------------------|
-| macOS                 | =$HOME/bin/bunnydns=    | =$HOME/libexec/bunnydns=        | =$HOME/share/man/man1/bunnydns.1= |
-| SmartOS global zone   | =/opt/custom/bin/bunnydns= | =/opt/custom/libexec/bunnydns= | =/opt/custom/share/man/man1/bunnydns.1= |
-| SmartOS native zone   | =/opt/local/bin/bunnydns= | =/opt/local/libexec/bunnydns=  | =/opt/local/share/man/man1/bunnydns.1= |
+| Platform            | Command                    | Runtime                        | Manual                                  |
+|---------------------+----------------------------+--------------------------------+-----------------------------------------|
+| macOS               | =$HOME/bin/bunnydns=       | =$HOME/libexec/bunnydns=       | =$HOME/share/man/man1/bunnydns.1=       |
+| SmartOS global zone | =/opt/custom/bin/bunnydns= | =/opt/custom/libexec/bunnydns= | =/opt/custom/share/man/man1/bunnydns.1= |
+| SmartOS native zone | =/opt/local/bin/bunnydns=  | =/opt/local/libexec/bunnydns=  | =/opt/local/share/man/man1/bunnydns.1=  |
+| Linux               | =/usr/local/bin/bunnydns=  | =/usr/local/libexec/bunnydns=  | =/usr/local/share/man/man1/bunnydns.1=  |
 
 Use =gmake update= to install a missing copy or replace changed content.  It
 compares the command, helper, dependency lockfile, and installed runtime.  An
@@ -125,24 +138,59 @@ Set an absolute =DESTDIR= to stage an installation.  =gmake uninstall= removes
 only files and package trees installed by this project; it preserves containing
 directories.
 
+* Dependency maintenance
+
+Check for newer tools and known npm vulnerabilities without installing or
+upgrading anything:
+
+#+begin_src sh
+gmake dependencies-status
+#+end_src
+
+The report shows installed tool versions, asks the platform package manager
+what it would update from its current catalog, runs =npm outdated --all= to
+show Current, Wanted, and Latest versions, and runs =npm audit=.  A stale
+system-package catalog is refreshed by the installation action:
+
+#+begin_src sh
+gmake dependencies
+#+end_src
+
+That action installs or upgrades only the required system packages, then runs
+=npm ci --ignore-scripts= so the JavaScript runtime exactly matches
+=package-lock.json=.  It uses Homebrew on macOS, =pkgin= under =/opt/tools= or
+=/opt/local= on SmartOS, and =apt-get=, =dnf=, =yum=, =apk=, or =zypper= on
+Linux.  It finishes with the status report.
+
+Advancing the reviewed JavaScript versions is deliberately separate:
+
+#+begin_src sh
+gmake dependencies-refresh
+#+end_src
+
+This updates every direct npm dependency to its registry =latest= version,
+saves exact versions, rewrites the lockfile, and runs the complete test suite.
+Review =package.json= and =package-lock.json= before committing.  On macOS or
+Linux, =make= is also valid when it is GNU Make; SmartOS normally uses =gmake=.
+
 * Commands
 
-| Command                                | Effect |
-|----------------------------------------+--------|
-| =bunnydns= or =bunnydns help=          | Print version and usage; change nothing. |
-| =bunnydns version=                     | Print the release version. |
-| =bunnydns list ZONE=                   | List every record and numeric record ID. |
-| =bunnydns list --records-file FILE=    | Read the zone and key path from FILE, then list the zone. |
-| =bunnydns add ZONE TYPE NAME VALUE=    | Back up, add, fetch, and verify one record. |
-| =bunnydns update ZONE ID OPTIONS=      | Back up and change only the named fields. |
-| =bunnydns delete ZONE ID=              | Back up, delete, verify, and print the deleted record. |
-| =bunnydns validate FILE=               | Validate local JSON without reading the key or network. |
-| =bunnydns check FILE=                  | Validate dependencies, key protection, and API access. |
-| =bunnydns plan FILE=                   | Print declarative actions without changing DNS. |
-| =bunnydns apply FILE=                  | Apply a conflict-free plan and verify it. |
-| =bunnydns verify FILE=                 | Require all declared records to match. |
-| =bunnydns prune FILE=                  | Delete only obsolete records owned by FILE's owner. |
-| =bunnydns init-key KEYFILE=            | Securely create a mode-0600 API key file. |
+| Command                             | Effect                                                    |
+|-------------------------------------+-----------------------------------------------------------|
+| =bunnydns= or =bunnydns help=       | Print version and usage; change nothing.                  |
+| =bunnydns version=                  | Print the release version.                                |
+| =bunnydns list ZONE=                | List every record and numeric record ID.                  |
+| =bunnydns list --records-file FILE= | Read the zone and key path from FILE, then list the zone. |
+| =bunnydns add ZONE TYPE NAME VALUE= | Back up, add, fetch, and verify one record.               |
+| =bunnydns update ZONE ID OPTIONS=   | Back up and change only the named fields.                 |
+| =bunnydns delete ZONE ID=           | Back up, delete, verify, and print the deleted record.    |
+| =bunnydns validate FILE=            | Validate local JSON without reading the key or network.   |
+| =bunnydns check FILE=               | Validate dependencies, key protection, and API access.    |
+| =bunnydns plan FILE=                | Print declarative actions without changing DNS.           |
+| =bunnydns apply FILE=               | Apply a conflict-free plan and verify it.                 |
+| =bunnydns verify FILE=              | Require all declared records to match.                    |
+| =bunnydns prune FILE=               | Delete only obsolete records owned by FILE's owner.       |
+| =bunnydns init-key KEYFILE=         | Securely create a mode-0600 API key file.                 |
 
 Global =--api-key FILE= and =--backup-dir DIR= options must appear before the
 command.  They accept absolute paths.
@@ -189,9 +237,9 @@ with the same name and type.  It never bypasses CNAME exclusivity.
 * Development
 
 #+begin_src sh
-npm ci --ignore-scripts
-gmake checksum
-gmake self-check
+  npm ci --ignore-scripts
+  gmake checksum
+  gmake self-check
 #+end_src
 
 =bunnydns.md5= and =bunnydns-node.mjs.md5= detect accidental source changes.
@@ -200,6 +248,7 @@ using the integrity values in =package-lock.json=.
 
 The offline suite covers direct changes, reconciliation, ownership isolation,
 backups, post-change verification, installer paths, update/no-update behavior,
-and macOS and SmartOS branches without changing a live DNS account.
+dependency-manager behavior, and macOS, SmartOS, and Linux branches without
+changing a live DNS account or the host package database.
 
 See =bunnydns(1)= for the complete command reference.

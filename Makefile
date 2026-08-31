@@ -1,11 +1,11 @@
 # Filename: Makefile
-# Description: Build, verify, install, and remove the Bunny DNS reconciler.
+# Description: Manage dependencies, verify, install, and remove bunnydns.
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
 # Version: 0.7.0
 # Last-Updated: 2026-08-31
-# Update #: 11
+# Update #: 12
 
 SHELL = /bin/sh
 
@@ -19,12 +19,14 @@ CHECKSUM = $(PROGRAM).md5
 HELPER_CHECKSUM = $(HELPER).md5
 RUNTIME_PACKAGE = package.json
 RUNTIME_LOCK = package-lock.json
+DEPENDENCY_TOOL = tools/dependencies.sh
 BINDIR =
 MANDIR =
 LIBEXECDIR =
 DESTDIR =
 
-.PHONY: help require-gnu-make checksum checksum-check check test self-check man-check show-install-paths install uninstall update
+.PHONY: help require-gnu-make dependencies-status dependencies dependencies-refresh \
+	checksum checksum-check check test self-check man-check show-install-paths install uninstall update
 
 help: require-gnu-make ## Show the available targets without changing anything.
 	@awk 'BEGIN {FS = ":.*## "} /^[[:alnum:]_-]+:.*## / {printf "%-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -35,6 +37,15 @@ require-gnu-make: ## Require GNU Make; use gmake on SmartOS.
 	  "GNU Make "*) : ;; \
 	  *) printf '%s\n' 'GNU Make is required. On SmartOS, install and invoke gmake.' >&2; exit 1 ;; \
 	esac
+
+dependencies-status: require-gnu-make ## Report installed tools, available package upgrades, and npm advisories.
+	@BUNNYDNS_MAKE='$(MAKE)' BUNNYDNS_NODE='$(NODE)' BUNNYDNS_NPM='$(NPM)' '$(DEPENDENCY_TOOL)' status
+
+dependencies: require-gnu-make ## Install or upgrade required system tools, then reproduce the locked npm runtime.
+	@BUNNYDNS_MAKE='$(MAKE)' BUNNYDNS_NODE='$(NODE)' BUNNYDNS_NPM='$(NPM)' '$(DEPENDENCY_TOOL)' install
+
+dependencies-refresh: require-gnu-make ## Advance direct npm dependencies to latest, rewrite the lockfile, and test.
+	@BUNNYDNS_MAKE='$(MAKE)' BUNNYDNS_NODE='$(NODE)' BUNNYDNS_NPM='$(NPM)' '$(DEPENDENCY_TOOL)' refresh
 
 checksum: require-gnu-make ## Refresh the MD5 sidecar after reviewing script changes.
 	@set -eu; \
@@ -81,8 +92,8 @@ check: checksum-check ## Check syntax, style, checksum, and the example declarat
 	@'$(NODE)' --check $(HELPER)
 	@'$(NODE)' $(HELPER) runtime-check >/dev/null
 	@'$(NPM)' ls --all --omit=dev >/dev/null
-	@'$(NODE)' -e 'const p = require("./package.json"); const l = require("./package-lock.json"); if (p.version !== "0.7.0" || l.packages[""].version !== p.version || p.dependencies["@bunny.net/openapi-client"] !== "0.3.0") process.exit(1)'
-	@if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh $(PROGRAM) tests/*.sh; \
+	@'$(NODE)' -e 'const p = require("./package.json"); const l = require("./package-lock.json"); const deps = p.dependencies || {}; const root = l.packages[""]; if (p.version !== "0.7.0" || !root || root.version !== p.version || !Object.hasOwn(deps, "@bunny.net/openapi-client")) process.exit(1); for (const [name, version] of Object.entries(deps)) { const locked = l.packages["node_modules/" + name]; if (!locked || locked.version !== version) process.exit(1); }'
+	@if command -v shellcheck >/dev/null 2>&1; then shellcheck -s sh $(PROGRAM) tools/*.sh tests/*.sh; \
 	else printf '%s\n' 'shellcheck not found; style check skipped.'; fi
 	@./$(PROGRAM) validate records.example.json
 
@@ -107,6 +118,8 @@ show-install-paths: require-gnu-make ## Show resolved executable and manual dest
 	case "$$os_name" in \
 	  Darwin) [ -n "$$bindir" ] || bindir="$${HOME:?HOME is not set}/bin"; \
 	          [ -n "$$mandir" ] || mandir="$${HOME:?HOME is not set}/share/man/man1" ;; \
+	  Linux) [ -n "$$bindir" ] || bindir=/usr/local/bin; \
+	         [ -n "$$mandir" ] || mandir=/usr/local/share/man/man1 ;; \
 	  SunOS) command -v zonename >/dev/null 2>&1 || { printf '%s\n' 'zonename is required on SmartOS.' >&2; exit 1; }; \
 	         if [ "`zonename`" = global ]; then smartos_prefix=/opt/custom; else smartos_prefix=/opt/local; fi; \
 	         [ -n "$$bindir" ] || bindir=$$smartos_prefix/bin; \
@@ -129,6 +142,8 @@ install: check man-check ## Install the executable, official-client runtime, and
 	case "$$os_name" in \
 	  Darwin) [ -n "$$bindir" ] || bindir="$${HOME:?HOME is not set}/bin"; \
 	          [ -n "$$mandir" ] || mandir="$${HOME:?HOME is not set}/share/man/man1" ;; \
+	  Linux) [ -n "$$bindir" ] || bindir=/usr/local/bin; \
+	         [ -n "$$mandir" ] || mandir=/usr/local/share/man/man1 ;; \
 	  SunOS) command -v zonename >/dev/null 2>&1 || { printf '%s\n' 'zonename is required on SmartOS.' >&2; exit 1; }; \
 	         if [ "`zonename`" = global ]; then smartos_prefix=/opt/custom; else smartos_prefix=/opt/local; fi; \
 	         [ -n "$$bindir" ] || bindir=$$smartos_prefix/bin; \
@@ -140,23 +155,16 @@ install: check man-check ## Install the executable, official-client runtime, and
 	case "$$mandir" in /*) ;; *) printf '%s\n' 'MANDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$libexecdir" in /*) ;; *) printf '%s\n' 'LIBEXECDIR must be absolute.' >&2; exit 1 ;; esac; \
 	case "$$destdir" in ''|/*) ;; *) printf '%s\n' 'DESTDIR must be empty or absolute.' >&2; exit 1 ;; esac; \
-	for package_dir in node_modules/@bunny.net/openapi-client node_modules/openapi-fetch node_modules/openapi-typescript-helpers; do \
-	  [ -d "$$package_dir" ] || { printf 'Missing runtime dependency: %s; run npm ci --ignore-scripts.\n' "$$package_dir" >&2; exit 1; }; \
-	done; \
-	mkdir -p "$$destdir$$bindir" "$$destdir$$mandir" \
-	  "$$destdir$$libexecdir/node_modules/@bunny.net" "$$destdir$$libexecdir/node_modules"; \
+	[ -d node_modules ] || { printf '%s\n' 'Missing runtime dependencies; run npm ci --ignore-scripts.' >&2; exit 1; }; \
+	mkdir -p "$$destdir$$bindir" "$$destdir$$mandir" "$$destdir$$libexecdir"; \
 	cp '$(PROGRAM)' "$$destdir$$bindir/$(PROGRAM)"; \
 	chmod 755 "$$destdir$$bindir/$(PROGRAM)"; \
 	cp '$(HELPER)' "$$destdir$$libexecdir/$(HELPER)"; \
 	chmod 755 "$$destdir$$libexecdir/$(HELPER)"; \
 	cp '$(RUNTIME_PACKAGE)' '$(RUNTIME_LOCK)' "$$destdir$$libexecdir/"; \
 	chmod 644 "$$destdir$$libexecdir/$(RUNTIME_PACKAGE)" "$$destdir$$libexecdir/$(RUNTIME_LOCK)"; \
-	rm -rf "$$destdir$$libexecdir/node_modules/@bunny.net/openapi-client" \
-	  "$$destdir$$libexecdir/node_modules/openapi-fetch" \
-	  "$$destdir$$libexecdir/node_modules/openapi-typescript-helpers"; \
-	cp -R node_modules/@bunny.net/openapi-client "$$destdir$$libexecdir/node_modules/@bunny.net/"; \
-	cp -R node_modules/openapi-fetch node_modules/openapi-typescript-helpers \
-	  "$$destdir$$libexecdir/node_modules/"; \
+	rm -rf "$$destdir$$libexecdir/node_modules"; \
+	cp -R node_modules "$$destdir$$libexecdir/"; \
 	chmod -R u=rwX,go=rX "$$destdir$$libexecdir/node_modules"; \
 	cp '$(MANPAGE)' "$$destdir$$mandir/$(MANPAGE)"; \
 	chmod 644 "$$destdir$$mandir/$(MANPAGE)"; \
@@ -169,6 +177,8 @@ uninstall: require-gnu-make ## Remove only files and packages installed by this 
 	case "$$os_name" in \
 	  Darwin) [ -n "$$bindir" ] || bindir="$${HOME:?HOME is not set}/bin"; \
 	          [ -n "$$mandir" ] || mandir="$${HOME:?HOME is not set}/share/man/man1" ;; \
+	  Linux) [ -n "$$bindir" ] || bindir=/usr/local/bin; \
+	         [ -n "$$mandir" ] || mandir=/usr/local/share/man/man1 ;; \
 	  SunOS) command -v zonename >/dev/null 2>&1 || { printf '%s\n' 'zonename is required on SmartOS.' >&2; exit 1; }; \
 	         if [ "`zonename`" = global ]; then smartos_prefix=/opt/custom; else smartos_prefix=/opt/local; fi; \
 	         [ -n "$$bindir" ] || bindir=$$smartos_prefix/bin; \
@@ -183,9 +193,7 @@ uninstall: require-gnu-make ## Remove only files and packages installed by this 
 	rm -f "$$destdir$$bindir/$(PROGRAM)" "$$destdir$$mandir/$(MANPAGE)" \
 	  "$$destdir$$libexecdir/$(HELPER)" "$$destdir$$libexecdir/$(RUNTIME_PACKAGE)" \
 	  "$$destdir$$libexecdir/$(RUNTIME_LOCK)"; \
-	rm -rf "$$destdir$$libexecdir/node_modules/@bunny.net/openapi-client" \
-	  "$$destdir$$libexecdir/node_modules/openapi-fetch" \
-	  "$$destdir$$libexecdir/node_modules/openapi-typescript-helpers"; \
+	rm -rf "$$destdir$$libexecdir/node_modules"; \
 	printf 'Removed installed files; installation directories were preserved.\n'
 
 update: check man-check ## Replace a differing installation; skip identical application content.
@@ -193,6 +201,7 @@ update: check man-check ## Replace a differing installation; skip identical appl
 	os_name=`uname -s`; bindir='$(BINDIR)'; libexecdir='$(LIBEXECDIR)'; destdir='$(DESTDIR)'; \
 	case "$$os_name" in \
 	  Darwin) [ -n "$$bindir" ] || bindir="$${HOME:?HOME is not set}/bin" ;; \
+	  Linux) [ -n "$$bindir" ] || bindir=/usr/local/bin ;; \
 	  SunOS) command -v zonename >/dev/null 2>&1 || { printf '%s\n' 'zonename is required on SmartOS.' >&2; exit 1; }; \
 	         if [ "`zonename`" = global ]; then smartos_prefix=/opt/custom; else smartos_prefix=/opt/local; fi; \
 	         [ -n "$$bindir" ] || bindir=$$smartos_prefix/bin ;; \

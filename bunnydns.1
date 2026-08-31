@@ -5,7 +5,7 @@
 .\" Created: 2026-08-18 Tue 00:00
 .\" Version: 0.7.0
 .\" Last-Updated: 2026-08-31 Mon 00:00
-.\" Update #: 17
+.\" Update #: 18
 .TH BUNNYDNS 1 "2026-08-31" "bunnydns 0.7.0" "SCS Commands"
 .SH NAME
 bunnydns \- inspect, edit, and reconcile Bunny DNS records
@@ -208,7 +208,7 @@ not rolled back automatically; retain the snapshot for recovery.
 Prepare dependencies and install:
 .PP
 .RS
-npm ci --ignore-scripts
+gmake dependencies
 .br
 gmake install
 .RE
@@ -228,10 +228,40 @@ Use
 .B gmake
 on SmartOS.
 .PP
+Linux defaults are below
+.IR /usr/local .
+GNU Make is normally invoked as make on Linux.
+.PP
 .B gmake update
 compares fresh MD5 digests and the installed runtime.  Identical content is
 left untouched; differing content is uninstalled and installed sequentially.
 Absolute BINDIR, LIBEXECDIR, MANDIR, and DESTDIR overrides are supported.
+.SH DEPENDENCY MAINTENANCE
+.B gmake dependencies-status
+reports installed tool versions, system packages that the current package
+catalog would update, npm Current, Wanted, and Latest versions, and npm
+security advisories.
+It does not install or upgrade packages.
+.PP
+.B gmake dependencies
+refreshes the platform package catalog, installs or upgrades the required
+system tools, and runs
+.B npm ci --ignore-scripts
+to reproduce the exact lockfile.
+It supports Homebrew on macOS;
+.B pkgin
+under
+.I /opt/tools
+in a SmartOS global zone or
+.I /opt/local
+in a native zone; and apt-get, dnf, yum, apk, or zypper on Linux.
+.PP
+.B gmake dependencies-refresh
+deliberately advances every direct npm dependency to its registry latest
+version, saves exact versions, rewrites the lockfile, and runs all project
+checks.
+Review the package and lock files before committing.
+GNU Make itself must be installed before these targets can be invoked.
 .SH PORTABILITY
 Requires POSIX shell utilities, jq 1.6 or newer, Node.js 18 or newer, npm, and
 Bunny's pinned official OpenAPI client.  GNU Make and an MD5 tool are required
