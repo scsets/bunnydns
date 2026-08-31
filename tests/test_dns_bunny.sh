@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.6
+# Version: 0.6.0
 # Last-Updated: 2026-08-30
-# Update #: 8
+# Update #: 10
 
 set -u
 LC_ALL=C
@@ -107,14 +107,14 @@ db_real_jq=$(command -v jq) || exit 1
 
 mkdir -p "$db_state_dir" "$db_mock_bin" "$db_mock_os_bin" "$db_mock_jq_bin" \
   "$db_bad_stat_bin" "$(dirname "$db_key_file")" || exit 1
-ln -s "$db_script_dir/mock_curl.sh" "$db_mock_bin/curl" || exit 1
-ln -s "$db_script_dir/mock_curl.sh" "$db_mock_os_bin/curl" || exit 1
 ln -s "$db_script_dir/mock_uname.sh" "$db_mock_os_bin/uname" || exit 1
 ln -s "$db_script_dir/mock_stat.sh" "$db_mock_os_bin/stat" || exit 1
 ln -s "$db_script_dir/mock_jq.sh" "$db_mock_jq_bin/jq" || exit 1
 ln -s "$db_script_dir/mock_bad_stat.sh" "$db_bad_stat_bin/stat" || exit 1
 printf '%s\n' 'test-bunny-api-key' >"$db_key_file" || exit 1
 chmod 600 "$db_key_file" || exit 1
+DNS_BUNNY_NODE_HELPER=$db_script_dir/mock_dns_bunny_node.mjs
+export DNS_BUNNY_NODE_HELPER
 
 cat >"$db_state_dir/zone.json" <<'EOF'
 {
@@ -181,11 +181,11 @@ cat >"$db_config_file" <<EOF
 }
 EOF
 
-expect_status 0 'no-argument usage is successful and non-mutating' "$db_program"
-expect_output 'dns_bunny.sh 0.5.6' 'usage reports the program version'
+expect_status 0 'no-argument usage is successful and read-only' "$db_program"
+expect_output 'dns_bunny.sh 0.6.0' 'usage reports the program version'
 
 expect_status 0 'version command succeeds' "$db_program" version
-expect_output 'dns_bunny.sh 0.5.6' 'version command is exact'
+expect_output 'dns_bunny.sh 0.6.0' 'version command is exact'
 
 expect_status 0 'valid declaration passes offline validation' "$db_program" validate "$db_config_file"
 expect_output 'Valid record file:' 'validation identifies the checked file'
@@ -236,7 +236,7 @@ expect_output 'cannot write DNS plan' 'mid-plan failure is reported instead of a
 expect_status 0 'apply performs and verifies the planned changes' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" apply "$db_config_file"
-expect_output 'Applied and verified 2 DNS change(s).' 'apply reports the mutation count'
+expect_output 'Applied and verified 2 DNS change(s).' 'apply reports the change count'
 expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=web-origin")] | length == 1' \
   "$db_state_dir/zone.json" 'apply records ownership when adopting'
 expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=api-origin" and .Ttl == 60)] | length == 1' \
@@ -297,6 +297,19 @@ expect_status 0 'read-only listing needs no HOME-backed backup directory' env \
   HOME= MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" --api-key "$db_key_file" list example.test
 expect_output 'id=104 A api 192.0.2.11' 'explicit key path is sufficient for read-only listing'
+
+db_drift_state_dir=$db_test_root/add-drift-state
+db_drift_backup_dir=$db_test_root/add-drift-backups
+mkdir -p "$db_drift_state_dir" || exit 1
+cp "$db_state_dir/zone.json" "$db_drift_state_dir/zone.json" || exit 1
+: >"$db_drift_state_dir/requests.log" || exit 1
+expect_status 1 'post-add verification detects a changed submitted field' env \
+  MOCK_BUNNY_STATE="$db_drift_state_dir" \
+  MOCK_BUNNY_ADD_VALUE_DRIFT=203.0.113.254 PATH="$db_mock_bin:$PATH" \
+  "$db_program" --api-key "$db_key_file" --backup-dir "$db_drift_backup_dir" \
+  add example.test A drift 192.0.2.55
+expect_output 'did not verify after the change' \
+  'post-change verification error uses operator-facing language'
 
 expect_status 0 'direct add accepts record fields from CLI arguments' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
@@ -367,7 +380,7 @@ expect_jq '[.Records[] | select(.Id == 105)] | length == 0' \
 db_direct_backup_count=$(find "$db_direct_backup_dir" -type f | wc -l | tr -d ' ')
 db_checks=$((db_checks + 1))
 if [ "$db_direct_backup_count" -eq 4 ]; then
-  record_success 'every direct mutation writes a protected pre-change backup'
+  record_success 'every direct change writes a protected pre-change backup'
 else
   record_failure "direct backup count is $db_direct_backup_count, expected 4"
 fi
@@ -404,7 +417,7 @@ expect_output 'REPLACE web-origin:' 'identity change is planned as a replacement
 expect_status 0 'apply performs and verifies the replacement' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" apply "$db_replace_config"
-expect_output 'Applied and verified 1 DNS change(s).' 'replacement reports one mutation'
+expect_output 'Applied and verified 1 DNS change(s).' 'replacement reports one change'
 expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=web-origin" and .Name == "web")] | length == 1' \
   "$db_state_dir/zone.json" 'replacement creates the new record identity'
 expect_jq '[.Records[] | select(.Id == 101)] | length == 0' \
@@ -417,7 +430,7 @@ jq --arg backup_dir "$db_prune_backup_dir" \
 expect_status 0 'prune deletes only obsolete records for this owner' env \
   MOCK_BUNNY_STATE="$db_state_dir" PATH="$db_mock_bin:$PATH" \
   "$db_program" prune "$db_prune_config"
-expect_output 'Deleted 1 obsolete project-owned DNS record(s).' 'prune reports its deletion count'
+expect_output 'Deleted and verified 1 obsolete project-owned DNS record(s).' 'prune reports its deletion count'
 expect_jq '[.Records[] | select(.Comment == "managed-by:project-one; key=api-origin")] | length == 0' \
   "$db_state_dir/zone.json" 'prune removes the obsolete record'
 expect_jq '[.Records[] | select(.Comment == "managed-by:other-project; key=other-origin")] | length == 1' \
@@ -463,9 +476,9 @@ db_checks=$((db_checks + 1))
 if grep 'PUT https://api.bunny.net/dnszone/42/records' "$db_state_dir/requests.log" >/dev/null 2>&1 \
   && grep 'POST https://api.bunny.net/dnszone/42/records/101' "$db_state_dir/requests.log" >/dev/null 2>&1 \
   && grep 'DELETE https://api.bunny.net/dnszone/42/records/' "$db_state_dir/requests.log" >/dev/null 2>&1; then
-  record_success 'mutations use Bunny add, update, and delete methods'
+  record_success 'record changes use Bunny add, update, and delete methods'
 else
-  record_failure 'expected Bunny mutation methods were not observed'
+  record_failure 'expected Bunny change methods were not observed'
 fi
 
 if [ "$db_failures" -ne 0 ]; then

@@ -3,10 +3,10 @@
 .\" Author: SCS
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-08-18 Tue 00:00
-.\" Version: 0.5.6
+.\" Version: 0.6.0
 .\" Last-Updated: 2026-08-30 Sun 00:00
-.\" Update #: 14
-.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.5.6" "SCS Commands"
+.\" Update #: 16
+.TH DNS_BUNNY 1 "2026-08-30" "dns_bunny 0.6.0" "SCS Commands"
 .SH NAME
 dns_bunny.sh \- inspect, edit, and reconcile records in a Bunny DNS zone
 .SH SYNOPSIS
@@ -57,6 +57,13 @@ Direct updates and deletions use Bunny's numeric record ID.
 File-based reconciliation preserves unrelated zone records and records owned
 by other projects.
 .PP
+The shell program owns reconciliation, backups, and verification.
+API transport and pagination use Bunny's official
+.B @bunny.net/openapi-client
+through the installed
+.B dns_bunny_node.mjs
+helper.
+.PP
 With no arguments, the program prints its version and short usage, exits
 successfully, and changes nothing.
 The ordinary workflow is to run
@@ -77,7 +84,7 @@ The default for direct commands is
 The option takes a file path, not the secret value.
 .TP
 .BI --backup-dir " directory"
-Write pre-mutation zone snapshots below this absolute directory.
+Write pre-change zone snapshots below this absolute directory.
 The default for direct commands is
 .IR $HOME/.local/state/dns-bunny/backups .
 For a file-based command, this option overrides the declaration's
@@ -234,7 +241,10 @@ An absolute path to the one-line Bunny API key file.
 An absolute local directory for protected pre-change zone documents.
 .TP
 .B records
-A non-empty array of desired record objects.
+An array of desired record objects.
+An empty array is valid and allows an explicit
+.B prune
+to remove all records owned by this declaration.
 .PP
 Every record requires a unique lowercase
 .BR key ,
@@ -306,12 +316,13 @@ Direct commands use
 unless
 .B --api-key
 selects another absolute path.
-The program places the AccessKey request header in a temporary mode-0600 file
-so the key does not appear in curl's process arguments.
-Temporary request files are removed on normal exit and handled HUP, INT, or
-TERM signals.
+The official-client helper reads the protected key file directly.
+The secret is not copied to a temporary file, environment variable, shell
+history, or process argument; only the key-file path is passed to the helper.
+Temporary request bodies and API responses are removed on normal exit and
+handled HUP, INT, or TERM signals.
 SIGKILL cannot run the cleanup trap; a protected mode-0700 temporary directory
-and mode-0600 request files may remain under TMPDIR after such a termination.
+containing DNS data may remain under TMPDIR after such a termination.
 .SH BACKUPS
 Before
 .BR add ,
@@ -332,24 +343,37 @@ never overwritten.
 The supplied GNU Makefile installs to
 .I $HOME/bin
 and
+.I $HOME/libexec/dns-bunny
+and
 .I $HOME/share/man/man1
 on macOS.
-On SmartOS it requires the global zone and installs to
+On a SmartOS global zone it installs to
 .I /opt/custom/bin
+and
+.I /opt/custom/libexec/dns-bunny
 and
 .I /opt/custom/share/man/man1
 by default.
+In a SmartOS native zone, the corresponding defaults are below
+.IR /opt/local ,
+outside the small global-zone
+.I /root
+memory filesystem.
 Use
 .B gmake
 on SmartOS.
-Absolute BINDIR and MANDIR overrides and an absolute DESTDIR staging prefix are
-supported.
+Before checking or installing from a source tree, run
+.B npm ci --ignore-scripts
+to prepare the exact locked runtime.
+Absolute BINDIR, LIBEXECDIR, and MANDIR overrides and an absolute DESTDIR
+staging prefix are supported.
 .PP
 .B gmake update
-computes the MD5 digests of the source and installed scripts.
-Identical content is reported and left untouched.
-Differing content is reported with the installed and incoming versions and both
-digests, then
+computes MD5 digests for the source and installed shell script, Node helper,
+and dependency lockfile.
+Completely identical application content is reported and left untouched.
+Differing content is reported with the installed and incoming versions and the
+component digests, then
 .B uninstall
 and
 .B install
@@ -358,16 +382,22 @@ A missing installed script is installed directly.
 .PP
 .B gmake check
 validates
-.IR dns_bunny.sh.md5 .
-After reviewing a script change, run
+.I dns_bunny.sh.md5
+and
+.IR dns_bunny_node.mjs.md5 .
+After reviewing either script, run
 .B gmake checksum
-to refresh this source-tree sidecar.
+to refresh the source-tree sidecars.
 MD5 is used only for content comparison and accidental-corruption detection;
 it does not authenticate the source.
 .SH PORTABILITY
 The program uses POSIX shell syntax and supports key-file mode checks on macOS,
-Linux, and SmartOS.
-It requires curl, jq 1.6 or newer, stat, mktemp, and ordinary POSIX utilities.
+Linux, and SmartOS, including SmartOS native zones.
+It requires Node.js 18 or newer, the pinned official Bunny OpenAPI client, jq
+1.6 or newer, stat, mktemp, and ordinary POSIX utilities.
+On SmartOS it finds Node in PATH, /opt/tools/bin, or /opt/local/bin.
+In a fresh native zone, install the prerequisites with
+.BR "pkgin install nodejs jq gmake" .
 The validator checks for the jq IN filter before reading a declaration.
 Project checks and installation updates also require macOS
 .BR md5 ,
@@ -394,13 +424,19 @@ The command received HUP, INT, or TERM and ran its signal cleanup handler.
 Default protected API-key file for direct commands.
 .TP
 .I $HOME/.local/state/dns-bunny/backups
-Default protected snapshot directory for direct mutations.
+Default protected snapshot directory for direct changes.
 .TP
 .I records.example.json
 Copyable declaration schema with non-secret example values.
 .TP
 .I dns_bunny.sh.md5
 Source-tree MD5 sidecar checked before installation; it is not installed.
+.TP
+.I dns_bunny_node.mjs.md5
+Source-tree MD5 sidecar for the official-client helper; it is not installed.
+.TP
+.I $HOME/libexec/dns-bunny
+Default macOS location for the helper and pinned Node runtime packages.
 .TP
 .I README.org
 Quickstart, safety model, installation instructions, and integration guidance.
@@ -415,7 +451,8 @@ before every
 .B apply
 and retain an off-project copy of important DNS exports.
 .SH SEE ALSO
-.BR curl (1),
+.BR node (1),
+.BR npm (1),
 .BR jq (1)
 .PP
 Bunny API authentication:

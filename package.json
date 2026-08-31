@@ -1,0 +1,13 @@
+{
+  "name": "dns-bunny-runtime",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Official Bunny API client runtime for dns_bunny.sh",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@bunny.net/openapi-client": "0.3.0"
+  }
+}

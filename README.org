@@ -5,9 +5,9 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-29
-# Version: 0.5.6
+# Version: 0.6.0
 # Last-Updated: 2026-08-30
-# Update #: 10
+# Update #: 12
 
 * Overview
 
@@ -33,13 +33,26 @@ The tool never creates or deletes a DNS zone, changes registrar delegation, or
 manages DNSSEC.  It does not read credentials from the declaration or from
 command-line arguments.
 
+The reconciliation and safety policy remains a small POSIX shell program.  API
+transport is delegated to =dns_bunny_node.mjs=, which uses Bunny's official
+=@bunny.net/openapi-client=.  This keeps project ownership, safe pruning,
+snapshots, and post-change verification in this tool while avoiding a locally
+maintained HTTP implementation.
+
+Bunny's official =@bunny.net/cli= remains useful on its supported platforms,
+but its npm package launches prebuilt native binaries and the pinned 0.15.1
+release has no =sunos-x64= binary.  The official OpenAPI client is pure
+JavaScript, supports Node 18 or newer, and was exercised successfully in a
+SmartOS native zone.  Driving that client directly therefore preserves the
+same official API definitions on both macOS and SmartOS.
+
 ** How it works
 
 1. The tool reads a protected one-line API key file and locates exactly one
    existing zone by its domain name.
 2. =list= fetches and prints that zone directly; no declaration is needed.
 3. =add=, =update=, and =delete= validate their CLI fields, write a protected
-   snapshot, perform one explicit mutation, fetch the zone again, and verify
+   snapshot, perform one explicit change, fetch the zone again, and verify
    the result.
 4. File-based commands validate the declaration and normalize record types and
    optional fields into Bunny's API shape.
@@ -52,7 +65,7 @@ command-line arguments.
 
 ** Quickstart
 
-First run the non-mutating checks:
+First run the read-only checks:
 
 #+begin_src sh
 ./dns_bunny.sh
@@ -76,7 +89,7 @@ For a one-off record, use the numeric IDs printed by =list= for later edits:
 ./dns_bunny.sh delete ckg.re 123456
 #+end_src
 
-Each direct mutation first writes a protected snapshot under
+Each direct change first writes a protected snapshot under
 =$HOME/.local/state/dns-bunny/backups=.  Review the snapshot path printed by the
 command.  Use =--backup-dir /absolute/path= before the command to override it.
 
@@ -91,7 +104,7 @@ cp records.example.json records.json
 ./dns_bunny.sh plan records.json
 #+end_src
 
-Review the complete plan.  The first DNS mutation is explicit:
+Review the complete plan.  The first DNS change is explicit:
 
 #+begin_src sh
 ./dns_bunny.sh apply records.json
@@ -100,7 +113,11 @@ Review the complete plan.  The first DNS mutation is explicit:
 
 * Requirements
 
-- A POSIX =/bin/sh=, =curl=, =stat=, =mktemp=, and ordinary POSIX tools.
+- A POSIX =/bin/sh=, =stat=, =mktemp=, and ordinary POSIX tools.
+- Node.js 18 or newer and the pinned official Bunny OpenAPI client installed by
+  =npm ci --ignore-scripts=.  Node is available through pkgsrc in SmartOS
+  native zones; the program also checks =/opt/local/bin/node= and the SmartOS
+  global-zone =/opt/tools/bin/node= when it is absent from =PATH=.
 - jq 1.6 or newer.  The declaration validator checks for the required =IN=
   filter and reports the version floor before reading a declaration.
 - macOS, Linux, or SmartOS for direct execution.  Key-file mode inspection is
@@ -111,6 +128,13 @@ Review the complete plan.  The first DNS mutation is explicit:
 - An MD5 implementation for project verification and installation updates:
   macOS =md5=, SmartOS =digest=, GNU =md5sum=, or =openssl=.
 - Optional =shellcheck= and either =mandoc= or =nroff= for fuller local checks.
+
+On a fresh SmartOS native zone, the missing build/runtime prerequisites can be
+installed persistently below =/opt/local= with:
+
+#+begin_src sh
+pkgin install nodejs jq gmake
+#+end_src
 
 * Record declaration
 
@@ -123,7 +147,8 @@ are:
 - =zone=: the existing Bunny DNS zone name.
 - =key_file=: an absolute path to a protected, one-line Bunny account API key.
 - =backup_dir=: an absolute path for protected pre-change zone snapshots.
-- =records=: a non-empty list of desired records.
+- =records=: a list of desired records.  An empty list is valid, which is
+  useful for explicitly pruning all records owned by this declaration.
 
 Every record requires a unique lowercase =key=, a =type=, a zone-relative
 =name=, and a non-empty =value=.  Use =@= or an empty string for the zone apex.
@@ -165,7 +190,7 @@ successfully, and has no side effects.
 
 Global options go before the command.  =--api-key FILE= selects an absolute
 protected API-key file.  =--backup-dir DIR= selects an absolute directory for
-direct-mutation snapshots and also overrides a declaration's =backup_dir= for
+backups before direct changes and also overrides a declaration's =backup_dir= for
 that invocation.
 
 The direct =add= command accepts =--ttl=, =--priority=, =--weight=, =--port=,
@@ -211,7 +236,7 @@ Choose one stable =owner= per independently pruned declaration.  Reusing an
 owner in two declarations would let either declaration prune records omitted
 from itself.  Changing an owner makes the old records look unmanaged; it is not
 a rename operation.  Duplicate ownership comments and ambiguous unmanaged
-matches are conflicts, so the tool stops before mutation.
+matches are conflicts, so the tool stops before making changes.
 
 An exact unmanaged record may be adopted by adding the ownership comment.
 Changing an owned record's name or type uses delete-then-create because Bunny's
@@ -235,11 +260,13 @@ That value preserves the existing =managed-by:matrix-server; key=...= comments.
 
 The API key file must be a regular, non-symbolic file with mode 0400 or 0600.
 It must contain exactly one line of printable ASCII with no leading or trailing
-space.  The key is copied into a mode-0600 temporary header file so it does not
-appear in =curl='s process arguments.  Temporary request data is removed on
-normal exit and on handled HUP, INT, or TERM signals.  SIGKILL cannot run shell
-cleanup; after such a termination, a mode-0700 =dns_bunny.*= directory with
-mode-0600 request files may remain under =TMPDIR=.
+space.  The official-client helper reads that protected file directly.  The
+secret is not copied to a temporary file, environment variable, shell history,
+or process argument; only the key-file path is passed to the helper.  Temporary
+request bodies and API responses are removed on normal exit and on handled
+HUP, INT, or TERM signals.  SIGKILL cannot run shell cleanup, so a protected
+mode-0700 =dns_bunny.*= directory containing DNS data may remain under =TMPDIR=
+after such a termination.
 
 Direct commands default to =$HOME/.secrets/bunnynet-api-key=.  The global
 =--api-key /absolute/path= option selects a different file.  Despite its short
@@ -258,12 +285,12 @@ project declaration must use the full path:
 Do not commit the key.  Keep it on the trusted operator machine and do not copy
 it to a public application server.
 
-Before any =add=, =update=, =delete=, =apply=, or =prune= mutation, the full
+Before =add=, =update=, =delete=, =apply=, or =prune= changes anything, the full
 current zone document is saved.  Direct commands default to
 =$HOME/.local/state/dns-bunny/backups=; declarations use =backup_dir=.  The
 directory is mode 0700 and each snapshot is mode 0600.  Timestamp and process
 ID are included in the filename, and an existing name is never overwritten.
-API mutations are sequential and are not rolled back automatically after a
+API changes are sequential and are not rolled back automatically after a
 later request fails; use the snapshot to inspect and recover a partial run.
 
 * Installation
@@ -275,22 +302,32 @@ gmake
 gmake show-install-paths
 #+end_src
 
-On macOS, =gmake install= places the executable in =$HOME/bin= and the manual
-page in =$HOME/share/man/man1=.  On SmartOS, installation is permitted only in
-the global zone and defaults to =/opt/custom/bin= and
-=/opt/custom/share/man/man1=.
+Prepare the exact, locked runtime once after checkout or archive extraction:
 
-Use =gmake update= for an existing installation.  It computes the MD5 of the
-source and installed scripts rather than trusting their version strings.  If
-the contents are identical, it reports that no update is needed and changes
-nothing.  If they differ, it prints the installed and incoming versions and
-both MD5 values, then runs =uninstall= followed by =install=.  A missing
-installed script is treated as a first installation.
+#+begin_src sh
+npm ci --ignore-scripts
+#+end_src
+
+On macOS, =gmake install= places the executable in =$HOME/bin=, the helper and
+official-client runtime in =$HOME/libexec/dns-bunny=, and the manual page in
+=$HOME/share/man/man1=.  A SmartOS global-zone install uses the corresponding
+=/opt/custom= paths.  A SmartOS native-zone install uses =/opt/local=, keeping
+the application and dependencies out of the small global-zone =/root= memory
+filesystem.
+
+Use =gmake update= for an existing installation.  It compares the source and
+installed shell script, Node helper, and dependency lockfile by MD5 rather than
+trusting their version strings.  If all three are identical, it reports that no
+update is needed and changes nothing.  If any differ, it prints the installed
+and incoming versions and component MD5 values, then runs =uninstall= followed
+by =install=.  A missing installed script is treated as a first installation.
 
 Override logical destinations with absolute paths:
 
 #+begin_src sh
-gmake install BINDIR=/usr/local/bin MANDIR=/usr/local/share/man/man1
+gmake install BINDIR=/usr/local/bin \
+  LIBEXECDIR=/usr/local/libexec/dns-bunny \
+  MANDIR=/usr/local/share/man/man1
 #+end_src
 
 Use an absolute =DESTDIR= to stage a package without writing to live locations:
@@ -300,15 +337,23 @@ gmake install DESTDIR=/tmp/bunny-dns-stage
 gmake uninstall DESTDIR=/tmp/bunny-dns-stage
 #+end_src
 
-=uninstall= removes only =dns_bunny.sh= and =dns_bunny.1=; it preserves their
-containing directories.
+=uninstall= removes only =dns_bunny.sh=, =dns_bunny.1=, the installed helper,
+its runtime metadata, and the three dependency package trees installed by this
+project.  It preserves their containing directories.
 
-=dns_bunny.sh.md5= is a source-tree sidecar in the usual
-=checksum  filename= form.  =gmake check= validates it, and =gmake checksum=
-refreshes it after a reviewed script change.  The sidecar is not installed:
-=update= computes both live checksums independently.  MD5 is used here only to
-detect equality and accidental corruption; it is not a signature and does not
-authenticate the source.
+=dns_bunny.sh.md5= and =dns_bunny_node.mjs.md5= are source-tree sidecars in the
+usual =checksum  filename= form.  =gmake check= validates both, and
+=gmake checksum= refreshes them after reviewed script changes.  The sidecars
+are not installed: =update= computes live checksums independently.  MD5 is used
+here only to detect equality and accidental corruption; it is not a signature
+and does not authenticate the source.  The SHA-512 package integrity values in
+=package-lock.json= authenticate downloads performed by npm.
+
+For a later import into an SVN vendor directory, keep release sources and npm
+dependencies as pinned =.tgz= or =.zip= archives with checksums rather than an
+exploded =node_modules= tree.  SVN externals are not a good match for immutable
+npm registry archives.  No SVN checkout is created or modified by this
+repository's installer.
 
 * Future plans and possibilities
 
@@ -337,11 +382,12 @@ compatibility and TLS boundary are verified.
 Run:
 
 #+begin_src sh
-gmake checksum       # after reviewing a change to dns_bunny.sh
+npm ci --ignore-scripts
+gmake checksum       # after reviewing a change to either script
 gmake self-check
 #+end_src
 
-The offline suite uses a stateful fake Bunny API.  It exercises unambiguous
+The offline suite uses a stateful fake official-client helper.  It exercises unambiguous
 direct and declaration listing, adding, partial updating, advanced-field
 preservation, identity replacement, deletion, JSON validation,
 planning, fail-closed plan construction, adoption, reconciliation,
@@ -359,4 +405,6 @@ and =plan= against a reviewed project declaration before the first real
 - [[https://docs.bunny.net/reference/dnszonepublic_addrecord][Bunny API: Add DNS Record]]
 - [[https://docs.bunny.net/api-reference/authentication][Bunny API authentication]]
 - [[https://bunny.net/docs/dns/records.md][Bunny DNS records]]
+- [[https://www.npmjs.com/package/@bunny.net/openapi-client][Official Bunny OpenAPI client]]
+- [[https://github.com/BunnyWay/cli][Official Bunny CLI source]]
 - =dns_bunny(1)= for the complete command reference.

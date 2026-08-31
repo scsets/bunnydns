@@ -5,22 +5,21 @@
 # Author: SCS
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-08-18 Tue 00:00
-# Version: 0.5.6
+# Version: 0.6.0
 # Last-Updated: 2026-08-30 Sun 00:00
-# Update #: 14
+# Update #: 17
 
 set -u
 LC_ALL=C
 export LC_ALL
 
 PROGRAM=dns_bunny.sh
-VERSION=0.5.6
-API_BASE=https://api.bunny.net
+VERSION=0.6.0
 TEMP_ROOT=${TMPDIR:-/tmp}
 TEMP_ROOT=${TEMP_ROOT%/}
 WORK_DIR=
-CURL_CONFIG=
-HEADER_FILE=
+NODE_COMMAND=
+NODE_HELPER=
 CONFIG_FILE=
 ZONE=
 ZONE_ID=
@@ -32,8 +31,11 @@ DESIRED_FILE=
 DESIRED_LINES=
 ZONE_FILE=
 PLAN_FILE=
+PRUNE_FILE=
 API_KEY_OPTION=
 BACKUP_DIR_OPTION=
+TTY_STATE=
+TTY_NEEDS_RESTORE=false
 
 usage() {
   printf '%s %s\n' "$PROGRAM" "$VERSION"
@@ -59,7 +61,7 @@ Usage:
 
 Global options must precede the command:
   --api-key FILE    Protected key file (default: $HOME/.secrets/bunnynet-api-key)
-  --backup-dir DIR  Direct-mutation backups (default: $HOME/.local/state/dns-bunny/backups)
+  --backup-dir DIR  Backups before direct changes (default: $HOME/.local/state/dns-bunny/backups)
 
 Record OPTIONS are --ttl, --type, --name, --value, --priority, --weight,
 --port, --flags, --tag, --disable, and --enable. Add takes TYPE, NAME, and
@@ -68,7 +70,7 @@ defaults to 60 seconds when omitted.
 
 List takes a zone name. Use list --records-file to read the zone and API-key
 file location from a RECORDS.json file; every current zone record is listed.
-With no command, nothing changes. Mutations require add, update, delete,
+With no command, nothing changes. Changes require add, update, delete,
 apply, prune, or init-key. --api-key names a file; it never accepts the secret.
 EOF
 }
@@ -87,6 +89,10 @@ die() {
 }
 
 cleanup() {
+  if [ "$TTY_NEEDS_RESTORE" = true ] && [ -n "$TTY_STATE" ]; then
+    stty "$TTY_STATE" </dev/tty 2>/dev/null || :
+    TTY_NEEDS_RESTORE=false
+  fi
   if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
     case "$WORK_DIR" in
       "$TEMP_ROOT"/dns_bunny.*) rm -rf "$WORK_DIR" ;;
@@ -101,12 +107,11 @@ make_work_dir() {
   chmod 700 "$WORK_DIR" || die "cannot protect temporary directory"
   trap 'cleanup' 0
   trap 'cleanup; exit 130' HUP INT TERM
-  CURL_CONFIG=$WORK_DIR/curl.conf
-  HEADER_FILE=$WORK_DIR/headers
   DESIRED_FILE=$WORK_DIR/desired.json
   DESIRED_LINES=$WORK_DIR/desired.ndjson
   ZONE_FILE=$WORK_DIR/zone.json
   PLAN_FILE=$WORK_DIR/plan.ndjson
+  PRUNE_FILE=$WORK_DIR/prune.ndjson
 }
 
 require_command() {
@@ -161,9 +166,9 @@ validate_config() {
     and (.zone | type == "string" and test("^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"))
     and (.key_file | type == "string" and startswith("/"))
     and (.backup_dir | type == "string" and startswith("/"))
-    and (.records | type == "array" and length > 0)
+    and (.records | type == "array")
     and (all(.records[];
-      (.key | type == "string" and test("^[a-z0-9][a-z0-9-]*$"))
+      (.key | type == "string" and length <= 64 and test("^[a-z0-9][a-z0-9-]*$"))
       and (.type | type == "string" and valid_type)
       and (.name | type == "string" and (. == "" or . == "@" or test("^[A-Za-z0-9_.*-]+$")))
       and (.value | type == "string" and length > 0)
@@ -256,80 +261,84 @@ load_api_key() {
     *) die "Bunny API key file must have mode 0400 or 0600, not $db_mode" ;;
   esac
 
-  API_KEY=
-  API_KEY_EXTRA=
-  {
-    IFS= read -r API_KEY || [ -n "$API_KEY" ]
-    if IFS= read -r API_KEY_EXTRA; then
-      : "$API_KEY_EXTRA"
-      die "Bunny API key file must contain exactly one line"
-    fi
-  } <"$KEY_FILE"
-
-  validate_api_key "$API_KEY"
-
-  umask 077
-  {
-    printf '%s\n' 'silent'
-    printf '%s\n' 'show-error'
-    printf '%s\n' 'connect-timeout = 10'
-    printf '%s\n' 'max-time = 60'
-    printf '%s\n' 'header = "Accept: application/json"'
-    printf '%s\n' 'header = "Content-Type: application/json"'
-  } >"$CURL_CONFIG" || die "cannot prepare protected API request configuration"
-  chmod 600 "$CURL_CONFIG" || die "cannot protect API request configuration"
-  printf 'AccessKey: %s\n' "$API_KEY" >"$HEADER_FILE" || die "cannot prepare protected API request header"
-  chmod 600 "$HEADER_FILE" || die "cannot protect API request header"
-  API_KEY=
-  API_KEY_EXTRA=
-  unset API_KEY API_KEY_EXTRA
 }
 
-api_request() {
-  db_method=$1
-  db_url=$2
-  db_body_file=$3
-  db_output_file=$4
-
-  if [ -n "$db_body_file" ]; then
-    db_http_code=$(curl --config "$CURL_CONFIG" --header "@$HEADER_FILE" --request "$db_method" --url "$db_url" \
-      --data-binary "@$db_body_file" --output "$db_output_file" --write-out '%{http_code}')
+resolve_node_helper() {
+  if command -v node >/dev/null 2>&1; then
+    NODE_COMMAND=$(command -v node)
+  elif [ -x /opt/tools/bin/node ]; then
+    NODE_COMMAND=/opt/tools/bin/node
+  elif [ -x /opt/local/bin/node ]; then
+    NODE_COMMAND=/opt/local/bin/node
   else
-    db_http_code=$(curl --config "$CURL_CONFIG" --header "@$HEADER_FILE" --request "$db_method" --url "$db_url" \
-      --output "$db_output_file" --write-out '%{http_code}')
+    die 'Node.js 18 or newer is required'
   fi
-  db_curl_status=$?
 
-  [ "$db_curl_status" -eq 0 ] || die "Bunny API request failed before receiving an HTTP response"
-  case "$db_http_code" in
-    2??) return 0 ;;
+  db_node_major=$($NODE_COMMAND -p 'process.versions.node.split(".")[0]' 2>/dev/null) \
+    || die 'cannot determine the Node.js version'
+  case "$db_node_major" in
+    ''|*[!0-9]*) die 'cannot determine the Node.js version' ;;
   esac
+  [ "$db_node_major" -ge 18 ] || die 'Node.js 18 or newer is required'
 
-  db_message=$(jq -r '.Message // .ErrorKey // empty' "$db_output_file" 2>/dev/null || :)
-  [ -n "$db_message" ] || db_message='Bunny API returned an error'
-  die "$db_message (HTTP $db_http_code)"
+  if [ -n "${DNS_BUNNY_NODE_HELPER:-}" ]; then
+    NODE_HELPER=$DNS_BUNNY_NODE_HELPER
+  else
+    db_program_dir=$(unset CDPATH; cd "$(dirname "$0")" && pwd) \
+      || die 'cannot locate the program directory'
+    if [ -f "$db_program_dir/dns_bunny_node.mjs" ]; then
+      NODE_HELPER=$db_program_dir/dns_bunny_node.mjs
+    else
+      NODE_HELPER=$db_program_dir/../libexec/dns-bunny/dns_bunny_node.mjs
+    fi
+  fi
+  case "$NODE_HELPER" in
+    /*) ;;
+    *) die "Node helper path must be absolute: $NODE_HELPER" ;;
+  esac
+  [ -f "$NODE_HELPER" ] || die "Node helper not found: $NODE_HELPER"
+}
+
+node_request() {
+  db_node_error=$WORK_DIR/node-error.txt
+  : >"$db_node_error" || die 'cannot initialize Node helper diagnostics'
+  if "$NODE_COMMAND" "$NODE_HELPER" "$@" 2>"$db_node_error"; then
+    return 0
+  fi
+  db_node_message=$(sed -n '1p' "$db_node_error")
+  [ -n "$db_node_message" ] || db_node_message='Bunny API request failed'
+  die "$db_node_message"
 }
 
 find_zone() {
   db_zone_list=$WORK_DIR/zones.json
-  api_request GET "$API_BASE/dnszone?page=1&perPage=1000&search=$ZONE" '' "$db_zone_list"
-  db_zone_count=$(jq --arg zone "$ZONE" '[.Items[]? | select((.Domain | ascii_downcase) == $zone)] | length' "$db_zone_list")
+  node_request find-zone "$KEY_FILE" "$ZONE" "$db_zone_list"
+  jq -e 'type == "object" and (.Items | type == "array")' "$db_zone_list" >/dev/null \
+    || die 'Bunny returned an invalid zone search result'
+  db_zone_count=$(jq '.Items | length' "$db_zone_list") \
+    || die "cannot count exact Bunny zone matches"
   [ "$db_zone_count" -eq 1 ] || die "expected one Bunny DNS zone named $ZONE, found $db_zone_count"
-  ZONE_ID=$(jq -r --arg zone "$ZONE" '.Items[] | select((.Domain | ascii_downcase) == $zone) | .Id' "$db_zone_list")
+  ZONE_ID=$(jq -r '.Items[0].Id' "$db_zone_list") \
+    || die "cannot read the Bunny zone ID"
   case "$ZONE_ID" in
     ''|*[!0-9]*) die "Bunny returned an invalid zone ID for $ZONE" ;;
   esac
 }
 
 fetch_zone() {
-  api_request GET "$API_BASE/dnszone/$ZONE_ID" '' "$ZONE_FILE"
-  jq -e --arg zone "$ZONE" '(.Domain | ascii_downcase) == $zone and (.Records | type == "array")' \
+  node_request fetch-zone "$KEY_FILE" "$ZONE_ID" "$ZONE" "$ZONE_FILE"
+  jq -e --arg zone "$ZONE" '(.Domain | ascii_downcase) == $zone' \
     "$ZONE_FILE" >/dev/null || die "Bunny returned an invalid zone document"
+  jq -e '
+    (.Records | type == "array")
+    and all(.Records[]; .Id | type == "number" and floor == . and . > 0)
+    and (([.Records[].Id] | length) == ([.Records[].Id] | unique | length))
+  ' "$ZONE_FILE" >/dev/null || die "Bunny returned duplicate or invalid DNS record IDs"
 }
 
 prepare_online() {
   validate_config "$1"
-  require_command curl
+  resolve_node_helper
   require_file_mode_tool
   make_work_dir
   load_settings
@@ -341,7 +350,7 @@ prepare_online() {
 
 prepare_direct() {
   validate_zone_name "$1"
-  require_command curl
+  resolve_node_helper
   require_file_mode_tool
   make_work_dir
   ZONE=$(printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]')
@@ -586,18 +595,22 @@ apply_actions() {
     case "$db_action" in
       create)
         record_body "$db_action_json" "$WORK_DIR/record-body.json"
-        api_request PUT "$API_BASE/dnszone/$ZONE_ID/records" "$WORK_DIR/record-body.json" "$WORK_DIR/record-response.json"
+        node_request add-record "$KEY_FILE" "$ZONE_ID" \
+          "$WORK_DIR/record-body.json" "$WORK_DIR/record-response.json"
         ;;
       update)
         db_record_id=$(printf '%s\n' "$db_action_json" | jq -r '.record_id')
         record_body "$db_action_json" "$WORK_DIR/record-body.json"
-        api_request POST "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" "$WORK_DIR/record-body.json" "$WORK_DIR/record-response.json"
+        node_request update-record "$KEY_FILE" "$ZONE_ID" "$db_record_id" \
+          "$WORK_DIR/record-body.json" "$WORK_DIR/record-response.json"
         ;;
       replace)
         db_record_id=$(printf '%s\n' "$db_action_json" | jq -r '.record_id')
-        api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
+        node_request delete-record "$KEY_FILE" "$ZONE_ID" "$db_record_id" \
+          "$WORK_DIR/delete-response.json"
         record_body "$db_action_json" "$WORK_DIR/record-body.json"
-        api_request PUT "$API_BASE/dnszone/$ZONE_ID/records" "$WORK_DIR/record-body.json" "$WORK_DIR/record-response.json"
+        node_request add-record "$KEY_FILE" "$ZONE_ID" \
+          "$WORK_DIR/record-body.json" "$WORK_DIR/record-response.json"
         ;;
       ok) ;;
       *) die "refusing to apply unresolved DNS action: $db_action" ;;
@@ -612,6 +625,22 @@ verify_plan_is_clean() {
     || die "cannot inspect DNS plan results"
   [ "$db_conflicts" -eq 0 ] || die "$db_conflicts DNS conflict(s) prevent a clean declared state"
   [ "$db_not_ok" -eq 0 ] || die "$db_not_ok DNS record(s) do not match the declared state"
+}
+
+build_prune_plan() {
+  db_desired_comments=$WORK_DIR/desired-comments.json
+  jq '[.[].Comment]' "$DESIRED_FILE" >"$db_desired_comments" \
+    || die "cannot prepare managed DNS key list"
+  jq -c --arg prefix "$MANAGED_PREFIX" --slurpfile wanted "$db_desired_comments" '
+    .Records[]?
+    | select((.Comment // "") | startswith($prefix))
+    | select(([($wanted[0][] == (.Comment // ""))] | any) | not)
+    | {Id, Type, Name, Value, Comment}
+  ' "$ZONE_FILE" >"$PRUNE_FILE" || die "cannot prepare DNS prune plan"
+}
+
+count_prune_actions() {
+  jq -s 'length' "$PRUNE_FILE"
 }
 
 record_type_id() {
@@ -991,7 +1020,7 @@ verify_added_record() {
   db_wanted=$(canonical_add_body "$db_body_path") \
     || die 'cannot normalize direct DNS record request'
   [ -n "$db_actual" ] && [ "$db_actual" = "$db_wanted" ] \
-    || die "Bunny DNS record $db_record_id did not verify after the mutation"
+    || die "Bunny DNS record $db_record_id did not verify after the change"
 }
 
 verify_direct_record() {
@@ -1000,7 +1029,7 @@ verify_direct_record() {
   db_actual=$(canonical_zone_record "$db_record_id") || die 'cannot verify direct DNS record'
   db_wanted=$(canonical_direct_body "$db_body_path") || die 'cannot normalize direct DNS record request'
   [ -n "$db_actual" ] && [ "$db_actual" = "$db_wanted" ] \
-    || die "Bunny DNS record $db_record_id did not verify after the mutation"
+    || die "Bunny DNS record $db_record_id did not verify after the change"
 }
 
 cmd_validate() {
@@ -1010,7 +1039,8 @@ cmd_validate() {
 
 cmd_check() {
   prepare_online "$1"
-  db_record_count=$(jq '.Records | length' "$ZONE_FILE")
+  db_record_count=$(jq '.Records | length' "$ZONE_FILE") \
+    || die 'cannot count Bunny DNS records'
   say "Bunny API access is valid."
   say "Zone: $ZONE (ID $ZONE_ID, $db_record_count current records)"
   say "Owner: $OWNER"
@@ -1056,7 +1086,8 @@ cmd_add() {
   validate_direct_body "$db_body_path"
   validate_direct_record_conflicts "$db_body_path" 0
   backup_zone
-  api_request PUT "$API_BASE/dnszone/$ZONE_ID/records" "$db_body_path" "$WORK_DIR/direct-response.json"
+  node_request add-record "$KEY_FILE" "$ZONE_ID" "$db_body_path" \
+    "$WORK_DIR/direct-response.json"
   db_record_id=$(jq -r '.Id // empty' "$WORK_DIR/direct-response.json") \
     || die 'cannot read the new Bunny DNS record identifier'
   validate_record_id "$db_record_id"
@@ -1103,13 +1134,15 @@ cmd_update() {
     || die 'cannot read requested DNS record identity'
   backup_zone
   if [ "$db_current_identity" = "$db_wanted_identity" ]; then
-    api_request POST "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" \
+    node_request update-record "$KEY_FILE" "$ZONE_ID" "$db_record_id" \
       "$db_body_path" "$WORK_DIR/direct-response.json"
     db_new_record_id=$db_record_id
     db_action=Updated
   else
-    api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
-    api_request PUT "$API_BASE/dnszone/$ZONE_ID/records" "$db_body_path" "$WORK_DIR/direct-response.json"
+    node_request delete-record "$KEY_FILE" "$ZONE_ID" "$db_record_id" \
+      "$WORK_DIR/delete-response.json"
+    node_request add-record "$KEY_FILE" "$ZONE_ID" "$db_body_path" \
+      "$WORK_DIR/direct-response.json"
     db_new_record_id=$(jq -r '.Id // empty' "$WORK_DIR/direct-response.json") \
       || die 'cannot read replacement Bunny DNS record identifier'
     validate_record_id "$db_new_record_id"
@@ -1137,7 +1170,8 @@ cmd_delete() {
     || die 'cannot format the DNS record selected for deletion'
   [ -n "$db_deleted_record" ] || die 'cannot preserve the DNS record selected for deletion'
   backup_zone
-  api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
+  node_request delete-record "$KEY_FILE" "$ZONE_ID" "$db_record_id" \
+    "$WORK_DIR/delete-response.json"
   fetch_zone
   db_record_count=$(jq --argjson id "$db_record_id" '[.Records[] | select(.Id == $id)] | length' "$ZONE_FILE") \
     || die 'cannot verify the DNS record deletion'
@@ -1192,29 +1226,32 @@ cmd_prune() {
   build_plan
   verify_plan_is_clean
 
-  db_desired_comments=$WORK_DIR/desired-comments.json
-  jq '[.[].Comment]' "$DESIRED_FILE" >"$db_desired_comments" || die "cannot prepare managed DNS key list"
-  db_prune_file=$WORK_DIR/prune.ndjson
-  jq -c --arg prefix "$MANAGED_PREFIX" --slurpfile wanted "$db_desired_comments" '
-    .Records[]?
-    | select((.Comment // "") | startswith($prefix))
-    | select(([($wanted[0][] == (.Comment // ""))] | any) | not)
-    | {Id, Type, Name, Value, Comment}
-  ' "$ZONE_FILE" >"$db_prune_file" || die "cannot prepare DNS prune plan"
-
-  db_prune_count=$(wc -l <"$db_prune_file" | tr -d ' ')
+  build_prune_plan
+  db_prune_count=$(count_prune_actions) || die "cannot count obsolete project-owned DNS records"
   if [ "$db_prune_count" -eq 0 ]; then
     say 'No obsolete project-owned DNS records exist.'
     return 0
   fi
 
-  jq -r '"DELETE id=\(.Id) type=\(.Type) name=\(.Name // "@") value=\(.Value // "") -- \(.Comment)"' "$db_prune_file"
+  jq -r '"DELETE id=\(.Id) type=\(.Type) name=\(.Name // "@") value=\(.Value // "") -- \(.Comment)"' "$PRUNE_FILE"
   backup_zone
+  db_deleted_count=$db_prune_count
   while IFS= read -r db_prune_json; do
-    db_record_id=$(printf '%s\n' "$db_prune_json" | jq -r '.Id')
-    api_request DELETE "$API_BASE/dnszone/$ZONE_ID/records/$db_record_id" '' "$WORK_DIR/delete-response.json"
-  done <"$db_prune_file"
-  say "Deleted $db_prune_count obsolete project-owned DNS record(s)."
+    db_record_id=$(printf '%s\n' "$db_prune_json" | jq -r '.Id') \
+      || die "cannot read obsolete Bunny DNS record ID"
+    node_request delete-record "$KEY_FILE" "$ZONE_ID" "$db_record_id" \
+      "$WORK_DIR/delete-response.json"
+  done <"$PRUNE_FILE"
+
+  fetch_zone
+  build_plan
+  verify_plan_is_clean
+  build_prune_plan
+  db_prune_count=$(count_prune_actions) \
+    || die "cannot verify obsolete project-owned DNS records"
+  [ "$db_prune_count" -eq 0 ] \
+    || die "$db_prune_count obsolete project-owned DNS record(s) still exist after prune"
+  say "Deleted and verified $db_deleted_count obsolete project-owned DNS record(s)."
 }
 
 cmd_init_key() {
@@ -1236,15 +1273,17 @@ cmd_init_key() {
 
   mkdir -p "$db_key_dir" || die "cannot create key directory"
   chmod 700 "$db_key_dir" || die "cannot protect key directory"
-  db_tty_state=$(stty -g </dev/tty) || die "cannot inspect terminal state"
+  TTY_STATE=$(stty -g </dev/tty) || die "cannot inspect terminal state"
   printf 'Bunny API key: ' >/dev/tty
+  TTY_NEEDS_RESTORE=true
+  trap 'cleanup' 0
+  trap 'cleanup; exit 130' HUP INT TERM
   stty -echo </dev/tty || die "cannot disable terminal echo"
-  trap 'stty "$db_tty_state" </dev/tty 2>/dev/null || :; printf "\n" >/dev/tty; exit 130' HUP INT TERM
   db_key_value=
   IFS= read -r db_key_value </dev/tty
   db_read_status=$?
-  stty "$db_tty_state" </dev/tty || die "cannot restore terminal state"
-  trap 'cleanup; exit 130' HUP INT TERM
+  stty "$TTY_STATE" </dev/tty || die "cannot restore terminal state"
+  TTY_NEEDS_RESTORE=false
   printf '\n' >/dev/tty
   [ "$db_read_status" -eq 0 ] || die "could not read the Bunny API key"
   validate_api_key "$db_key_value"
