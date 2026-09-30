@@ -1,0 +1,183 @@
+#+TITLE: bunnydns
+
+# Filename: README.org
+# Description: Operator and developer guide for bunnydns.
+# Author: SCS
+# Copyright (C) 2026, SCS, all rights reserved.
+# Created: 2026-09-30
+# Version: 0.1.0
+# Last-Updated: 2026-09-30
+# Update #: 1
+
+* Overview
+
+=bunnydns= edits records in a Bunny DNS zone and reconciles the records a
+project declares in a JSON file, without touching anyone else's records.
+Its interface follows SmartOS tools such as =vmadm= and =zfs=.
+
+#+begin_example
+bunnydns list [-H] [-o field,...] zone
+bunnydns add zone type name value [property=value ...]
+bunnydns update zone id property=value ...
+bunnydns delete zone id
+bunnydns apply [-n] [-f file]
+bunnydns verify [-f file]
+bunnydns prune [-n] [-f file]
+bunnydns validate [-f file]
+bunnydns init-key
+bunnydns help | version
+#+end_example
+
+Declared records carry the Bunny comment =managed-by:OWNER; key=KEY=.  The
+owner separates projects sharing a zone; the key follows a record through
+name, type, value, and TTL changes.  =bunnydns= adopts only unmarked records,
+treats another owner's or key's record as a conflict, and prunes only its
+owner's undeclared records.  It never creates zones or changes delegation.
+
+The [[https://github.com/BunnyWay/cli][official bunny.net CLI]] is the general
+tool for Bunny; =bunnydns= adds the ownership-aware reconciliation it lacks.
+
+* Requirements
+
+- Python 3.9 or newer, standard library only; 3.14 is the default.
+- GNU Make and an MD5 tool (=md5=, =md5sum=, =digest=, or =openssl=) to check
+  and install; =shellcheck= and =mandoc= are used when present.
+- HTTPS access to =https://api.bunny.net=.
+
+* Installation
+
+#+begin_src sh
+gmake dependencies     # install or upgrade Python 3.14 and GNU Make
+gmake show-install-paths
+gmake install
+bunnydns init-key
+#+end_src
+
+| System              | Command                     | Manual                                 |
+|---------------------+-----------------------------+----------------------------------------|
+| SmartOS global zone | =/opt/custom/sbin/bunnydns= | =/opt/custom/man/man8/bunnydns.8=      |
+| SmartOS native zone | =/opt/local/sbin/bunnydns=  | =/opt/local/man/man8/bunnydns.8=       |
+| macOS               | =~/.local/bin/bunnydns=     | =$XDG_DATA_HOME/man/man8/bunnydns.8=   |
+| Linux               | =/usr/local/sbin/bunnydns=  | =/usr/local/share/man/man8/bunnydns.8= |
+
+The installed command is =bunnydns.py= with its =#!= line set to the Python
+found at install time (=python3.14=, else a =python3= that is 3.9 or newer;
+=pkgsrc= directories are searched too), so cron and zones with another =PATH=
+run the same interpreter.  Override with =PYTHON=/absolute/path=, and the
+destinations with absolute =BINDIR=, =MANDIR=, and =DESTDIR=.
+
+=gmake update= replaces the command or manual only when its MD5 differs.
+=gmake uninstall= removes both and keeps settings and backups.
+
+=gmake dependencies-status= reports tools and pending upgrades without
+installing anything.  =gmake dependencies= uses =pkgin= on SmartOS
+(=python314=, =gmake=, =mozilla-rootcerts-openssl=), Homebrew on macOS
+(=python@3.14=, =make=), and =apt-get=, =dnf=, =yum=, =apk=, or =zypper= on
+Linux.  On a fresh SmartOS zone, install =gmake= with =pkgin= first.
+
+* Settings
+
+| System              | Settings                                  | State (backups)                    |
+|---------------------+-------------------------------------------+------------------------------------|
+| SmartOS global zone | =/opt/custom/etc/bunnydns/bunnydns.conf=  | =/var/opt/bunnydns/backups=        |
+| SmartOS native zone | =/opt/local/etc/bunnydns/bunnydns.conf=   | =/var/opt/bunnydns/backups=        |
+| Elsewhere (XDG)     | =$XDG_CONFIG_HOME/bunnydns/bunnydns.conf= | =$XDG_STATE_HOME/bunnydns/backups= |
+
+The settings file is optional.  It holds =name=value= lines and =#=
+comments; =key_file= defaults to =api-key= beside it and =backup_dir= to the
+state directory's =backups=.  =bunnydns help= shows the paths in use.
+
+#+begin_example
+key_file=/opt/custom/etc/bunnydns/api-key
+backup_dir=/var/opt/bunnydns/backups
+#+end_example
+
+* Records file
+
+#+begin_src json
+{
+  "owner": "example-project",
+  "zone": "example.com",
+  "records": [
+    {"key": "web-origin", "type": "A", "name": "www", "value": "192.0.2.10"},
+    {"key": "mail", "type": "MX", "name": "@", "value": "mail.example.com", "priority": 10}
+  ]
+}
+#+end_src
+
+Each record has a unique lowercase =key=, the required =type=, =name= (=@=
+for the apex), and =value=, and optionally =ttl= (default 60), =priority=,
+=weight=, =port=, =flags=, =tag=, =disabled=, and =allow_multiple=.  The same
+property names work on the command line: =bunnydns update example.com 12345
+ttl=300 disabled=true=.  Unknown fields are errors.
+
+=apply -n= prints one line per declared record:
+
+#+begin_example
+UPDATE web-origin: A www 192.0.2.10 -- adopt the identical unmanaged record
+OK mail: MX @ mail.example.com -- matches
+CREATE api: A api 192.0.2.11 -- no such record
+#+end_example
+
+Planning rules, in order: declared records must not collide; a record with
+the key's ownership comment is updated in place (a move needs a free
+destination); otherwise an identical unmarked record is adopted; otherwise a
+record is created, provided a CNAME stays alone at its name and a new record
+joins an existing set of its type only with =allow_multiple=.  Names ignore
+ASCII case; values compare exactly.
+
+* Safety
+
+- The API key lives only in =key_file=: absolute, regular, not a symbolic
+  link, mode 0400 or 0600, one line of printable ASCII.  It never appears in
+  a command argument or the environment, and is sent only to Bunny.
+- Every write is preceded by a zone snapshot (file 0600, directory 0700)
+  and followed by a fresh read and verification.  Updates keep the record's
+  ID and all its other Bunny settings.
+- Writes are never retried or rolled back.  Do not run two writers against
+  one zone at once.
+- On SmartOS, when =SSL_CERT_FILE= is unset, pkgsrc's CA bundle is trusted.
+  TLS verification is never disabled.
+
+* Development
+
+#+begin_src sh
+gmake self-check    # checksum, compile, shellcheck, example, tests, manual
+gmake checksum      # after reviewing a change to bunnydns.py
+#+end_src
+
+=bunnydns.py= reads top to bottom: constants, settings, records and
+properties, the API key, the Bunny client, planning (pure functions), the
+commands, and =main()=.  Exit status is 0 on success, 1 on error, 2 on a
+usage error, and 130 when interrupted.
+
+The =unittest= suite in =tests/= never contacts Bunny or changes the host:
+
+- =test_planner.py=: the planning and output functions.
+- =test_commands.py=: every command against =support.FakeBunny=, a stateful
+  fake API on 127.0.0.1 with pagination, a decoy zone, and fault switches.
+- =test_api.py=: the client, API errors, and signals.
+- =test_inputs.py=: records, properties, settings, the key file, =init-key=.
+- =test_makefile.py=: staged installs with mock =uname=, =zonename=, and
+  package managers.
+
+Tests reach the fake API through =main(api_base_url=...)=, which accepts only
+Bunny's URL or a loopback address; the command line cannot redirect the key.
+
+* Files
+
+| Path                    | Purpose                                   |
+|-------------------------+-------------------------------------------|
+| =bunnydns.py=           | The program, installed as =bunnydns=.     |
+| =bunnydns.py.md5=       | Checksum of =bunnydns.py=.                |
+| =bunnydns.8=            | Manual page.                              |
+| =records.example.json=  | Records-file example.                     |
+| =tools/dependencies.sh= | Finds Python; reports and installs tools. |
+| =tools/install.sh=      | Install, update, uninstall, and checksum. |
+| =tests/=                | The test suite and shell mocks.           |
+
+* See also
+
+- =bunnydns(8)=
+- Bunny API authentication: https://docs.bunny.net/api-reference/authentication
+- Bunny DNS record API: https://docs.bunny.net/reference/dnszonepublic_addrecord

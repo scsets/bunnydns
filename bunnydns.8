@@ -1,0 +1,259 @@
+.\" Filename: bunnydns.8
+.\" Description: Manual page for bunnydns.
+.\" Author: SCS
+.\" Copyright (C) 2026, SCS, all rights reserved.
+.\" Created: 2026-09-30 Wed 00:00
+.\" Version: 0.1.0
+.\" Last-Updated: 2026-09-30 Wed 00:00
+.\" Update #: 1
+.TH BUNNYDNS 8 "2026-09-30" "bunnydns 0.1.0" "System Administration Commands"
+.SH NAME
+bunnydns \- inspect, edit, and reconcile Bunny DNS records
+.SH SYNOPSIS
+.B bunnydns list
+.RB [ \-H ]
+.RB [ \-o
+.IR field , ...]
+.I zone
+.br
+.B bunnydns add
+.I zone type name value
+.RI [ property = value " ...]"
+.br
+.B bunnydns update
+.RI "" "zone id property" = "value ..."
+.br
+.B bunnydns delete
+.I zone id
+.br
+.B bunnydns apply
+.RB [ \-n ]
+.RB [ \-f
+.IR file ]
+.br
+.B bunnydns verify
+.RB [ \-f
+.IR file ]
+.br
+.B bunnydns prune
+.RB [ \-n ]
+.RB [ \-f
+.IR file ]
+.br
+.B bunnydns validate
+.RB [ \-f
+.IR file ]
+.br
+.B bunnydns init\-key
+.br
+.B bunnydns help
+.br
+.B bunnydns version
+.SH DESCRIPTION
+.B bunnydns
+edits records in an existing Bunny DNS zone and reconciles the records a
+project declares in a records file, leaving every other record alone.
+.PP
+Records that a project declares carry the Bunny comment
+.PP
+.RS
+managed-by:\fIowner\fR; key=\fIkey\fR
+.RE
+.PP
+The owner separates projects that share a zone; the key identifies a record
+through name, type, value, and TTL changes.
+.SH SUBCOMMANDS
+.TP
+.BR list " [" \-H "] [" \-o " \fIfield\fR,...] \fIzone\fR"
+List the records of
+.I zone
+in columns under a header.
+.B \-H
+omits the header and separates fields with a tab, for scripts.
+.B \-o
+chooses the columns from
+.BR id ,
+the properties below, in any order; the default is
+.BR id,type,name,ttl,disabled,value .
+.TP
+.BI add " zone type name value " "[property=value ...]"
+Add one record, read it back, and verify it.
+.TP
+.BI update " zone id property=value ..."
+Change the given properties of one record in place.  The record keeps its
+ID and its other Bunny settings, including smart routing, pull zone, script,
+monitoring, and environment variables, even when its name or type changes.
+.TP
+.BI delete " zone id"
+Delete one record, verify that it is gone, and show what it was.
+.TP
+.BR apply " [" \-n "] [" \-f " \fIfile\fR]"
+Show the plan for the records file: one line per declared record, marked
+OK, CREATE, UPDATE, or CONFLICT with a reason.  If nothing conflicts, make
+the changes, read the zone again, and require every declared record to be
+OK.
+.B \-n
+shows the plan and changes nothing.
+.TP
+.BR verify " [" \-f " \fIfile\fR]"
+Show the plan and require every declared record to be OK.
+.TP
+.BR prune " [" \-n "] [" \-f " \fIfile\fR]"
+After a clean verification, delete this owner's records whose keys are no
+longer declared, then verify again.
+.B \-n
+shows what would be deleted.
+.TP
+.BR validate " [" \-f " \fIfile\fR]"
+Check a records file without reading the key or using the network.
+.TP
+.B init\-key
+Prompt on the terminal, with echo off, for the Bunny API key and store it
+in a new mode-0600
+.BR key_file .
+An existing key file is never replaced.
+.TP
+.B help
+Show the usage, properties, and settings locations.
+.TP
+.B version
+Show the version.
+.PP
+Commands that take a records file read
+.BI \-f " file"
+or, without it, standard input.
+.SH PROPERTIES
+Records files and the command line use the same property names.
+.TP
+.B type
+A, AAAA, CNAME, TXT, MX, SRV, CAA, PTR, NS, SVCB, HTTPS, or TLSA.
+.TP
+.B name
+Zone-relative name, or
+.B @
+for the zone apex.  Names ignore ASCII case.
+.TP
+.B value
+Record data.  Values are compared exactly.
+.TP
+.B ttl
+Seconds; default 60.
+.TP
+.BR priority ", " weight ", " port
+Integers; default 0.  Priority counts for MX, SRV, SVCB, and HTTPS, weight
+for A, AAAA, and SRV, and port for SRV.
+.TP
+.BR flags ", " tag
+CAA flags (0 to 255) and tag.
+.TP
+.B disabled
+.B true
+or
+.BR false ;
+default
+.BR false .
+.SH RECORDS FILE
+A JSON object with
+.B owner
+(lowercase, up to 64 characters),
+.B zone
+(an existing Bunny DNS zone), and
+.BR records ,
+an array of objects.  Each record has a unique lowercase
+.BR key ,
+the properties above
+.RB ( type ,
+.BR name ,
+and
+.B value
+are required), and optionally
+.BR allow_multiple .
+Unknown fields are errors.
+.PP
+A declared record is OK when its record matches; otherwise the record with
+its ownership comment is updated, or an identical unmarked record is
+adopted, or a new record is created.  A CNAME must be alone at its name,
+and a new record may join an existing record set of its type only with
+.BR allow_multiple .
+A record marked for another owner or key, duplicate ownership comments,
+ambiguous matches, and colliding declarations are conflicts, which stop
+.B apply
+before it writes.
+.SH SETTINGS
+The optional settings file holds
+.IB name = value
+lines and
+.B #
+comments:
+.TP
+.B key_file
+The API key file.  Default: the settings directory's
+.BR api\-key .
+.TP
+.B backup_dir
+The snapshot directory.  Default:
+.BR backups
+in the state directory.
+.PP
+On SmartOS the settings directory is
+.I /opt/custom/etc/bunnydns
+in the global zone and
+.I /opt/local/etc/bunnydns
+in a native zone, and the state directory is
+.IR /var/opt/bunnydns .
+Elsewhere they are
+.I $XDG_CONFIG_HOME/bunnydns
+and
+.IR $XDG_STATE_HOME/bunnydns ,
+which default to
+.I ~/.config/bunnydns
+and
+.IR ~/.local/state/bunnydns .
+.SH SAFETY
+The key file must be absolute, regular, not a symbolic link, mode 0400 or
+0600, and hold one line of printable ASCII without leading or trailing
+spaces.  The key never appears in a command argument or the environment; it
+is sent only in the AccessKey header, only to https://api.bunny.net, and
+never across a redirect.  TLS certificates are always verified.
+.PP
+Before any change, the zone is saved as JSON to a mode-0600 file in the
+mode-0700
+.BR backup_dir .
+Writes are never retried and are not rolled back; keep the snapshots.  Do
+not run two writers against one zone at once.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error, a conflict, or a failed verification.
+.TP
+.B 2
+Invalid command-line usage.
+.TP
+.B 130
+Interrupted by HUP, INT, or TERM.
+.SH EXAMPLES
+.nf
+bunnydns init\-key
+bunnydns list \-o id,type,name,priority,value example.com
+bunnydns add example.com MX @ mail.example.com priority=10
+bunnydns update example.com 12345 ttl=300 disabled=true
+bunnydns apply \-n \-f records.json
+bunnydns apply < records.json
+.fi
+.SH FILES
+.TP
+.I /opt/custom/etc/bunnydns/bunnydns.conf
+Settings in a SmartOS global zone.
+.TP
+.I /opt/custom/etc/bunnydns/api\-key
+Default API key file in a SmartOS global zone.
+.TP
+.I /var/opt/bunnydns/backups
+Default snapshot directory on SmartOS.
+.SH SEE ALSO
+.BR python3 (1)
+.PP
+Bunny API: https://docs.bunny.net/api-reference/authentication

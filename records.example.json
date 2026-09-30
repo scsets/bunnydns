@@ -1,0 +1,19 @@
+{
+  "owner": "example-project",
+  "zone": "example.com",
+  "records": [
+    {
+      "key": "web-origin",
+      "type": "A",
+      "name": "www",
+      "value": "192.0.2.10"
+    },
+    {
+      "key": "site-verification",
+      "type": "TXT",
+      "name": "@",
+      "value": "service-verification=replace-me",
+      "ttl": 300
+    }
+  ]
+}

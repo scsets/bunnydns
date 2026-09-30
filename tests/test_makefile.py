@@ -1,0 +1,181 @@
+# Filename: test_makefile.py
+# Description: Tests of the Makefile, installer, and dependency tool.
+# Author: SCS
+# Copyright (C) 2026, SCS, all rights reserved.
+# Created: 2026-09-30 Wed 00:00
+# Version: 0.1.0
+# Last-Updated: 2026-09-30 Wed 00:00
+# Update #: 1
+
+"""These tests stage installations under a temporary DESTDIR and put mock
+uname, zonename, and package managers first on PATH, so they never change
+the host or its package database."""
+
+import os
+import shutil
+import stat
+import subprocess
+import tempfile
+import unittest
+from collections import namedtuple
+from pathlib import Path
+
+from support import PROJECT_DIR
+
+TESTS_DIR = PROJECT_DIR / "tests"
+MAKE = os.environ.get("BUNNYDNS_TEST_MAKE") or shutil.which("gmake") or shutil.which("make")
+STAGED = {"BINDIR": "/opt/custom/sbin", "MANDIR": "/opt/custom/man/man8"}
+Result = namedtuple("Result", "status output")
+
+
+def gnu_make_available():
+    if not MAKE:
+        return False
+    return subprocess.run([MAKE, "--version"], capture_output=True, text=True).stdout.startswith("GNU Make ")
+
+
+@unittest.skipUnless(gnu_make_available(), "GNU Make is required")
+class MakefileTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="bunnydns-make-test."))
+        self.addCleanup(shutil.rmtree, self.root)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.stage = self.root / "stage"
+        self.log = self.root / "commands.log"
+        self.log.write_text("")
+        self.mock_bin = self.root / "mock-bin"
+        self.mock_bin.mkdir()
+        links = {"uname": "mock_uname.sh", "zonename": "mock_zonename.sh"}
+        links.update({name: "mock_dependency_command.sh" for name in ("brew", "pkgin", "apt-get", "id")})
+        for name, target in links.items():
+            (self.mock_bin / name).symlink_to(TESTS_DIR / target)
+        # Start each make afresh, not as a child of the make running the tests.
+        ignored = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "PYTHON", "XDG_DATA_HOME")
+        self.environment = {name: value for name, value in os.environ.items() if name not in ignored}
+        self.environment["HOME"] = str(self.home)
+        self.python = subprocess.run([str(PROJECT_DIR / "tools/dependencies.sh"), "python-path"],
+                                     capture_output=True, text=True, check=True).stdout.strip()
+
+    def make(self, *args, platform=None, zone=None, **environment):
+        env = dict(self.environment, **environment)
+        if platform:
+            env.update(PATH=f"{self.mock_bin}:{env['PATH']}", MOCK_UNAME=platform,
+                       MOCK_ZONENAME=zone or "global", MOCK_DEPENDENCY_LOG=str(self.log))
+        result = subprocess.run([MAKE, "--no-print-directory", "-C", str(PROJECT_DIR), *args],
+                                env=env, capture_output=True, text=True)
+        return Result(result.returncode, result.stdout + result.stderr)
+
+    def staged(self, target, **variables):
+        settings = {**STAGED, "DESTDIR": str(self.stage), **variables}
+        return self.make(target, *(f"{name}={value}" for name, value in settings.items()))
+
+    def assert_result(self, result, status, *needles):
+        self.assertEqual(result.status, status, result.output)
+        for needle in needles:
+            self.assertIn(needle, result.output)
+
+    def logged(self):
+        return self.log.read_text()
+
+    def test_default_install_paths(self):
+        cases = [
+            ("SunOS", "global", {}, "/opt/custom/sbin/bunnydns", "/opt/custom/man/man8/bunnydns.8"),
+            ("SunOS", "web01", {}, "/opt/local/sbin/bunnydns", "/opt/local/man/man8/bunnydns.8"),
+            ("Darwin", None, {}, f"{self.home}/.local/bin/bunnydns", f"{self.home}/.local/share/man/man8/bunnydns.8"),
+            ("Darwin", None, {"XDG_DATA_HOME": "/data"}, f"{self.home}/.local/bin/bunnydns", "/data/man/man8/bunnydns.8"),
+            ("Linux", None, {}, "/usr/local/sbin/bunnydns", "/usr/local/share/man/man8/bunnydns.8"),
+        ]
+        for platform, zone, environment, command, manual in cases:
+            with self.subTest(platform=platform, zone=zone, environment=environment):
+                self.assert_result(self.make("show-install-paths", platform=platform, zone=zone, **environment), 0,
+                                   f"Command: {command}\n", f"Manual:  {manual}\n", f"Python:  {self.python}\n")
+        self.assert_result(self.make("show-install-paths", "PYTHON=/opt/tools/bin/python3.14"), 0,
+                           "Python:  /opt/tools/bin/python3.14")
+
+    def test_refusals(self):
+        self.assert_result(self.make("show-install-paths", platform="Plan9"), 2, "Unsupported operating system: Plan9")
+        self.assert_result(self.make("show-install-paths", "BINDIR=relative/path"), 2, "BINDIR must be absolute")
+        self.assert_result(self.make("show-install-paths", "DESTDIR=stage"), 2, "DESTDIR must be empty or absolute")
+        self.assert_result(self.make("require-gnu-make", f"MAKE={TESTS_DIR / 'mock_non_gnu_make.sh'}"), 2,
+                           "GNU Make is required")
+        for python in ("/usr/bin/false", "python3", ""):
+            with self.subTest(python=python):
+                self.assert_result(self.staged("install", PYTHON=python), 2, "Python 3.9 or newer is required")
+        self.assertFalse(self.stage.exists())
+
+    def test_dependency_status_changes_nothing(self):
+        self.assert_result(self.make("dependencies-status", platform="Darwin"), 0,
+                           "Toolchain status for Darwin", "Python:   Python 3.")
+        self.assertEqual(self.logged(), "brew outdated --verbose --formula python@3.14 make\n")
+        self.assert_result(self.make("dependencies-status", platform="SunOS", zone="global"), 0, "/opt/tools/bin/pkgin")
+        self.assert_result(self.make("dependencies-status", platform="SunOS", zone="web01"), 0, "/opt/local/bin/pkgin")
+
+    def test_dependency_installation(self):
+        cases = [
+            ("Darwin", {}, ["brew update-if-needed", "brew install python@3.14 make", "brew upgrade --formula python@3.14 make"]),
+            ("SunOS", {"BUNNYDNS_PKGIN": str(self.mock_bin / "pkgin")},
+             ["pkgin -y update", "pkgin -y install python314 gmake mozilla-rootcerts-openssl"]),
+            ("Linux", {}, ["apt-get update", "apt-get install -y python3 make"]),
+        ]
+        for platform, environment, commands in cases:
+            with self.subTest(platform):
+                self.log.write_text("")
+                self.assert_result(self.make("dependencies", platform=platform, **environment), 0, "Toolchain status")
+                for command in commands:
+                    self.assertIn(command + "\n", self.logged())
+
+        self.log.write_text("")
+        result = self.make("dependencies", platform="Linux", MOCK_DEPENDENCY_FAIL="apt-get update")
+        self.assert_result(result, 2)
+        self.assertNotIn("apt-get install", self.logged())
+
+    def test_checksum(self):
+        self.assert_result(self.make("checksum-check"), 0, "Verified MD5")
+        sidecar = self.root / "generated.md5"
+        self.assert_result(self.make("checksum", f"CHECKSUM={sidecar}"), 0, "Recorded MD5")
+        self.assertEqual(sidecar.read_text(), (PROJECT_DIR / "bunnydns.py.md5").read_text())
+        sidecar.write_text("00000000000000000000000000000000  bunnydns.py\n")
+        self.assert_result(self.make("checksum-check", f"CHECKSUM={sidecar}"), 2, "Checksum mismatch for bunnydns.py")
+
+    def test_staged_install_update_and_uninstall(self):
+        program = self.stage / "opt/custom/sbin/bunnydns"
+        manual = self.stage / "opt/custom/man/man8/bunnydns.8"
+        source = (PROJECT_DIR / "bunnydns.py").read_text()
+        rendered = f"#!{self.python}\n" + source.split("\n", 1)[1]
+        manual_source = (PROJECT_DIR / "bunnydns.8").read_bytes()
+
+        self.assert_result(self.staged("update"), 0, "Installing bunnydns 0.1.0; no installed copy was found",
+                           f"Installed {program} (Python {self.python})")
+        self.assertEqual((program.read_text(), manual.read_bytes()), (rendered, manual_source))
+        self.assertEqual((stat.S_IMODE(program.stat().st_mode), stat.S_IMODE(manual.stat().st_mode)), (0o755, 0o644))
+        version = subprocess.run([str(program), "version"], capture_output=True, text=True, env={"PATH": "/nonexistent"})
+        self.assertEqual(version.stdout, "bunnydns 0.1.0\n")  # the #! line, not PATH, finds Python
+
+        program.chmod(0o700)
+        self.assert_result(self.staged("update"), 0, "No update needed: bunnydns 0.1.0 is identical")
+        self.assertEqual(stat.S_IMODE(program.stat().st_mode), 0o700)  # untouched
+
+        damage = {
+            "stale manual": lambda: manual.write_text(manual.read_text() + ".SH REVIEW\nOutdated.\n"),
+            "missing manual": manual.unlink,
+            "other interpreter": lambda: program.write_text("#!/nonexistent/python3\n" + source.split("\n", 1)[1]),
+            "local edit": lambda: program.write_text(rendered + "# local edit\n"),
+            "older version": lambda: program.write_text(rendered.replace('VERSION = "0.1.0"', 'VERSION = "0.0.9"')),
+        }
+        for label, damage_installation in damage.items():
+            with self.subTest(label):
+                damage_installation()
+                old = "0.0.9" if label == "older version" else "0.1.0"
+                self.assert_result(self.staged("update"), 0, f"Updating bunnydns {old} to 0.1.0.", "Content MD5:")
+                self.assertEqual((program.read_text(), manual.read_bytes()), (rendered, manual_source))
+
+        self.assert_result(self.staged("uninstall"), 0, "settings, and backups were kept")
+        self.assertFalse(program.exists() or manual.exists())
+        self.assertTrue(program.parent.is_dir() and manual.parent.is_dir())
+        self.assert_result(self.staged("install"), 0)
+        self.assert_result(self.staged("uninstall"), 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
