@@ -5,7 +5,7 @@
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
 # Last-Updated: 2026-09-30 Wed 00:00
-# Update #: 1
+# Update #: 2
 
 import os
 import platform
@@ -74,8 +74,8 @@ class RecordsTests(unittest.TestCase):
 
 class SiteTests(unittest.TestCase):
     def test_smartos_uses_the_illumos_layout(self):
-        self.assertEqual(bunnydns.site_dirs("SunOS", {}, lambda: "global"), ("/opt/custom/etc/bunnydns", "/var/opt/bunnydns"))
-        self.assertEqual(bunnydns.site_dirs("SunOS", {}, lambda: "web01"), ("/opt/local/etc/bunnydns", "/var/opt/bunnydns"))
+        self.assertEqual(bunnydns.site_dirs("SunOS", {}, lambda: "global"), ("/opt/custom/etc/bunnydns", "/var/bunnydns"))
+        self.assertEqual(bunnydns.site_dirs("SunOS", {}, lambda: "web01"), ("/opt/local/etc/bunnydns", "/var/bunnydns"))
 
     def test_other_systems_follow_xdg(self):
         def never():

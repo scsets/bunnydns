@@ -7,7 +7,7 @@
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
 # Last-Updated: 2026-09-30 Wed 00:00
-# Update #: 1
+# Update #: 2
 
 """Inspect, edit, and reconcile records in a Bunny DNS zone.
 
@@ -183,17 +183,18 @@ def ownership_comment(owner: str, key: str) -> str:
 
 # --- Settings ---------------------------------------------------------------
 #
-# SmartOS uses the illumos layout: /opt/custom/etc/bunnydns (global zone) or
-# /opt/local/etc/bunnydns (native zone) for settings and /var/opt/bunnydns for
-# state.  Other systems follow the XDG base directories.  The settings file,
-# bunnydns.conf, is optional; it holds name=value lines and # comments.
+# On SmartOS, settings live in /opt/custom/etc/bunnydns (global zone) or
+# /opt/local/etc/bunnydns (native zone), and state in /var/bunnydns, as
+# SmartOS's own tools keep theirs (/var/imgadm, /var/fw).  Other systems follow
+# the XDG base directories.  The settings file, bunnydns.conf, is optional; it
+# holds name=value lines and # comments.
 
 
 def site_dirs(system: str, environ: Mapping[str, str], zonename: Callable[[], str]) -> tuple:
     """Return (settings directory, state directory) for this system."""
     if system == "SunOS":
         prefix = "/opt/custom" if zonename() == "global" else "/opt/local"
-        return f"{prefix}/etc/{PROGRAM}", f"/var/opt/{PROGRAM}"
+        return f"{prefix}/etc/{PROGRAM}", f"/var/{PROGRAM}"
     home = environ.get("HOME") or os.path.expanduser("~")
 
     def xdg(variable: str, fallback: str) -> str:
