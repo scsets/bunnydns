@@ -5,7 +5,7 @@
 .\" Created: 2026-09-30 Wed 00:00
 .\" Version: 0.1.0
 .\" Last-Updated: 2026-09-30 Wed 00:00
-.\" Update #: 2
+.\" Update #: 3
 .TH BUNNYDNS 8 "2026-09-30" "bunnydns 0.1.0" "System Administration Commands"
 .SH NAME
 bunnydns \- inspect, edit, and reconcile Bunny DNS records
@@ -195,13 +195,10 @@ The snapshot directory.  Default:
 .BR backups
 in the state directory.
 .PP
-On SmartOS the settings directory is
-.I /opt/custom/etc/bunnydns
-in the global zone and
-.I /opt/local/etc/bunnydns
-in a native zone, and the state directory is
-.IR /var/bunnydns ,
-as with SmartOS's own tools.
+On SmartOS both are
+.I /var/bunnydns
+in every zone, as with SmartOS's own tools: the settings file, the API key,
+and the backups live together there.
 Elsewhere they are
 .I $XDG_CONFIG_HOME/bunnydns
 and
@@ -246,11 +243,11 @@ bunnydns apply < records.json
 .fi
 .SH FILES
 .TP
-.I /opt/custom/etc/bunnydns/bunnydns.conf
-Settings in a SmartOS global zone.
+.I /var/bunnydns/bunnydns.conf
+Settings on SmartOS.
 .TP
-.I /opt/custom/etc/bunnydns/api\-key
-Default API key file in a SmartOS global zone.
+.I /var/bunnydns/api\-key
+Default API key file on SmartOS.
 .TP
 .I /var/bunnydns/backups
 Default snapshot directory on SmartOS.

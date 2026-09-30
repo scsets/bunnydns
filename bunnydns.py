@@ -7,7 +7,7 @@
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
 # Last-Updated: 2026-09-30 Wed 00:00
-# Update #: 2
+# Update #: 3
 
 """Inspect, edit, and reconcile records in a Bunny DNS zone.
 
@@ -36,7 +36,6 @@ import socket
 import ssl
 import stat
 import string
-import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -183,18 +182,17 @@ def ownership_comment(owner: str, key: str) -> str:
 
 # --- Settings ---------------------------------------------------------------
 #
-# On SmartOS, settings live in /opt/custom/etc/bunnydns (global zone) or
-# /opt/local/etc/bunnydns (native zone), and state in /var/bunnydns, as
-# SmartOS's own tools keep theirs (/var/imgadm, /var/fw).  Other systems follow
-# the XDG base directories.  The settings file, bunnydns.conf, is optional; it
-# holds name=value lines and # comments.
+# On SmartOS, everything bunnydns keeps lives in /var/bunnydns in every zone:
+# the settings file, the API key, and the backups, just as imgadm keeps
+# /var/imgadm/imgadm.conf beside its state.  Other systems follow the XDG base
+# directories.  The settings file, bunnydns.conf, is optional; it holds
+# name=value lines and # comments.
 
 
-def site_dirs(system: str, environ: Mapping[str, str], zonename: Callable[[], str]) -> tuple:
+def site_dirs(system: str, environ: Mapping[str, str]) -> tuple:
     """Return (settings directory, state directory) for this system."""
     if system == "SunOS":
-        prefix = "/opt/custom" if zonename() == "global" else "/opt/local"
-        return f"{prefix}/etc/{PROGRAM}", f"/var/{PROGRAM}"
+        return f"/var/{PROGRAM}", f"/var/{PROGRAM}"
     home = environ.get("HOME") or os.path.expanduser("~")
 
     def xdg(variable: str, fallback: str) -> str:
@@ -204,15 +202,8 @@ def site_dirs(system: str, environ: Mapping[str, str], zonename: Callable[[], st
     return xdg("XDG_CONFIG_HOME", ".config"), xdg("XDG_STATE_HOME", ".local/state")
 
 
-def current_zone() -> str:
-    try:
-        return subprocess.run(["/usr/bin/zonename"], capture_output=True, text=True, check=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        raise BunnyDNSError("cannot determine the zone name with /usr/bin/zonename") from None
-
-
 def this_site() -> tuple:
-    return site_dirs(platform.system(), os.environ, current_zone)
+    return site_dirs(platform.system(), os.environ)
 
 
 def load_settings() -> dict:

@@ -7,7 +7,7 @@
 # Created: 2026-09-30
 # Version: 0.1.0
 # Last-Updated: 2026-09-30
-# Update #: 2
+# Update #: 3
 
 * Overview
 
@@ -77,18 +77,17 @@ Linux.  On a fresh SmartOS zone, install =gmake= with =pkgin= first.
 
 * Settings
 
-| System              | Settings                                  | State (backups)                    |
-|---------------------+-------------------------------------------+------------------------------------|
-| SmartOS global zone | =/opt/custom/etc/bunnydns/bunnydns.conf=  | =/var/bunnydns/backups=            |
-| SmartOS native zone | =/opt/local/etc/bunnydns/bunnydns.conf=   | =/var/bunnydns/backups=            |
-| Elsewhere (XDG)     | =$XDG_CONFIG_HOME/bunnydns/bunnydns.conf= | =$XDG_STATE_HOME/bunnydns/backups= |
+| System          | Settings                                  | API key                             | Backups                            |
+|-----------------+-------------------------------------------+-------------------------------------+------------------------------------|
+| SmartOS         | =/var/bunnydns/bunnydns.conf=             | =/var/bunnydns/api-key=             | =/var/bunnydns/backups=            |
+| Elsewhere (XDG) | =$XDG_CONFIG_HOME/bunnydns/bunnydns.conf= | =$XDG_CONFIG_HOME/bunnydns/api-key= | =$XDG_STATE_HOME/bunnydns/backups= |
 
 The settings file is optional.  It holds =name=value= lines and =#=
 comments; =key_file= defaults to =api-key= beside it and =backup_dir= to the
 state directory's =backups=.  =bunnydns help= shows the paths in use.
 
 #+begin_example
-key_file=/opt/custom/etc/bunnydns/api-key
+key_file=/var/bunnydns/api-key
 backup_dir=/var/bunnydns/backups
 #+end_example
 
