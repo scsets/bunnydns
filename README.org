@@ -6,8 +6,8 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30
 # Version: 0.1.0
-# Last-Updated: 2026-09-30
-# Update #: 3
+# Last-Updated: 2026-10-01
+# Update #: 4
 
 * Overview
 
@@ -34,8 +34,128 @@ name, type, value, and TTL changes.  =bunnydns= adopts only unmarked records,
 treats another owner's or key's record as a conflict, and prunes only its
 owner's undeclared records.  It never creates zones or changes delegation.
 
-The [[https://github.com/BunnyWay/cli][official bunny.net CLI]] is the general
-tool for Bunny; =bunnydns= adds the ownership-aware reconciliation it lacks.
+** Why we cannot use https://github.com/BunnyWay/cli directly
+
+The official bunny.net CLI, =bunny=, is the general tool for Bunny: zones,
+DNSSEC, record presets, storage, sites, and more.  On macOS and Linux it is
+the better choice for one-off work.  =bunnydns= exists because of two gaps
+in =bunny= 0.18.0 (2026-09-28):
+
+- *It does not run on SmartOS.*  =bunny= is TypeScript built into standalone
+  binaries with Bun, released only for macOS, Linux, and Windows.  Its npm
+  package is a launcher that picks one of those binaries; on illumos, where
+  Node reports the platform as =sunos-x64=, it exits with =Unsupported
+  platform=.  The source cannot run under Node instead, because it uses
+  Bun's own APIs, and Bun does not support illumos.  Neither the global zone
+  nor a native zone can run it; only an LX-branded zone running the Linux
+  binary might.  =bunnydns= needs only Python's standard library.
+- *It edits records but does not reconcile them.*  Its DNS commands add,
+  update, and remove one record at a time, and its BIND zone-file import
+  only adds.  It cannot compare the records a project declares with the
+  zone, mark records with an owner, refuse to overwrite another owner's
+  records, delete only its own undeclared records, or preview all of that
+  as a dry run.  That is the work of =apply=, =verify=, and =prune=.
+
+Wrapping =bunny= would still leave the reconciliation to write, and would
+still not run on SmartOS.  Revisit this if =bunny= gains illumos builds and
+a declarative sync.
+
+** Quickstart
+
+Install, then store the Bunny API key; the prompt does not echo:
+
+#+begin_src sh
+gmake dependencies
+gmake install
+bunnydns init-key
+#+end_src
+
+Inspect and edit records by hand.  =update= and =delete= take the ID that
+=list= shows, and every change first saves a snapshot of the zone (on
+SmartOS in =/var/bunnydns/backups=; Settings below covers other systems):
+
+#+begin_example
+$ bunnydns list example.com
+ID     TYPE  NAME     TTL   DISABLED  VALUE
+12344  TXT   @        3600  false     v=spf1 mx -all
+12345  A     staging  60    false     192.0.2.20
+12346  A     www      60    false     192.0.2.10
+
+$ bunnydns add example.com MX @ mail.example.com priority=10
+Backup: /var/bunnydns/backups/example.com-20261001T060146Z-s4ljfjad.json
+Added record 12347 to example.com: MX @ mail.example.com
+
+$ bunnydns update example.com 12345 ttl=300 disabled=true
+Backup: /var/bunnydns/backups/example.com-20261001T060146Z-tk631l3r.json
+Updated record 12345 in example.com: A staging 192.0.2.20
+
+$ bunnydns list -o id,type,name,priority,value example.com
+ID     TYPE  NAME     PRIORITY  VALUE
+12344  TXT   @        0         v=spf1 mx -all
+12347  MX    @        10        mail.example.com
+12345  A     staging  0         192.0.2.20
+12346  A     www      0         192.0.2.10
+#+end_example
+
+Declare a project's records in =records.json=:
+
+#+begin_src json
+{
+  "owner": "example-project",
+  "zone": "example.com",
+  "records": [
+    {"key": "web-origin", "type": "A", "name": "www", "value": "192.0.2.10"},
+    {"key": "mail", "type": "MX", "name": "@", "value": "mail.example.com", "priority": 10},
+    {"key": "api", "type": "A", "name": "api", "value": "192.0.2.11"}
+  ]
+}
+#+end_src
+
+Check the file offline, preview the plan, apply it, and verify:
+
+#+begin_example
+$ bunnydns validate -f records.json
+records.json: 3 valid record(s) for example.com.
+
+$ bunnydns apply -n -f records.json
+UPDATE web-origin: A www 192.0.2.10 -- adopt the identical unmanaged record
+UPDATE mail: MX @ mail.example.com -- adopt the identical unmanaged record
+CREATE api: A api 192.0.2.11 -- no such record
+3 change(s) would be made.
+
+$ bunnydns apply < records.json
+UPDATE web-origin: A www 192.0.2.10 -- adopt the identical unmanaged record
+UPDATE mail: MX @ mail.example.com -- adopt the identical unmanaged record
+CREATE api: A api 192.0.2.11 -- no such record
+Backup: /var/bunnydns/backups/example.com-20261001T060146Z-gyb7n0nr.json
+OK web-origin: A www 192.0.2.10 -- matches
+OK mail: MX @ mail.example.com -- matches
+OK api: A api 192.0.2.11 -- matches
+Applied and verified 3 change(s).
+
+$ bunnydns verify -f records.json
+OK web-origin: A www 192.0.2.10 -- matches
+OK mail: MX @ mail.example.com -- matches
+OK api: A api 192.0.2.11 -- matches
+All declared records match.
+#+end_example
+
+=apply= adopted the =www= and MX records made by hand by adding their
+ownership comments, and created =api=.  The TXT and =staging= records are
+not declared, so they were left alone.
+
+Remove =api= from =records.json=, then delete it from the zone:
+
+#+begin_example
+$ bunnydns prune -n -f records.json
+DELETE api: A api 192.0.2.11 -- no longer declared
+1 record(s) would be deleted.
+
+$ bunnydns prune -f records.json
+DELETE api: A api 192.0.2.11 -- no longer declared
+Backup: /var/bunnydns/backups/example.com-20261001T060146Z-6bs68kx8.json
+Deleted and verified 1 record(s).
+#+end_example
 
 * Requirements
 
