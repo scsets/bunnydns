@@ -5,7 +5,7 @@
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
 # Last-Updated: 2026-10-01 Thu 00:00
-# Update #: 2
+# Update #: 3
 
 """These tests stage installations under a temporary DESTDIR and put mock
 uname, zonename, and package managers first on PATH, so they never change
@@ -152,6 +152,21 @@ class MakefileTests(unittest.TestCase):
         self.assert_result(result, 2)
         self.assertNotIn("apt-get install", self.logged())
 
+    def test_install_warns_about_search_paths(self):
+        bindir, manroot = self.root / "bin", self.root / "man"
+        targets = (f"BINDIR={bindir}", f"MANDIR={manroot / 'man8'}", "DESTDIR=")
+        self.assert_result(self.make("install", *targets, MANPATH="/usr/share/man"), 0,
+                           f"Warning: {bindir} is not on PATH", f"Warning: {manroot} is not on MANPATH")
+        cases = {
+            "both found": {"PATH": f"{self.environment['PATH']}:{bindir}", "MANPATH": f"/usr/share/man:{manroot}"},
+            "MANPATH unset": {"PATH": f"{bindir}:{self.environment['PATH']}", "MANPATH": ""},
+        }
+        for label, environment in cases.items():
+            with self.subTest(label):
+                result = self.make("update", *targets, **environment)
+                self.assert_result(result, 0, "No update needed")
+                self.assertNotIn("Warning:", result.output)
+
     def test_checksum(self):
         self.assert_result(self.make("checksum-check"), 0, "Verified MD5")
         sidecar = self.root / "generated.md5"
@@ -167,8 +182,10 @@ class MakefileTests(unittest.TestCase):
         rendered = f"#!{self.python}\n" + source.split("\n", 1)[1]
         manual_source = (PROJECT_DIR / "bunnydns.8").read_bytes()
 
-        self.assert_result(self.staged("update"), 0, "Installing bunnydns 0.1.0; no installed copy was found",
+        result = self.staged("update")
+        self.assert_result(result, 0, "Installing bunnydns 0.1.0; no installed copy was found",
                            f"Installed {program} (Python {self.python})")
+        self.assertNotIn("Warning:", result.output)  # a staged install is for another system
         self.assertEqual((program.read_text(), manual.read_bytes()), (rendered, manual_source))
         self.assertEqual((stat.S_IMODE(program.stat().st_mode), stat.S_IMODE(manual.stat().st_mode)), (0o755, 0o644))
         version = subprocess.run([str(program), "version"], capture_output=True, text=True, env={"PATH": "/nonexistent"})

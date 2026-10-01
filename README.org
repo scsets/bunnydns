@@ -7,7 +7,7 @@
 # Created: 2026-09-30
 # Version: 0.1.0
 # Last-Updated: 2026-10-01
-# Update #: 5
+# Update #: 6
 
 * Overview
 
@@ -185,6 +185,11 @@ found at install time (=python3.14=, else a =python3= that is 3.9 or newer;
 =pkgsrc= directories are searched too), so cron and zones with another =PATH=
 run the same interpreter.  Override with =PYTHON=/absolute/path=, and the
 destinations with absolute =BINDIR=, =MANDIR=, and =DESTDIR=.
+
+=gmake install= and =gmake update= warn when the command's directory is not
+on =PATH=, or the manual's is not on a set =MANPATH=.  The stock root profile
+in the SmartOS global zone has neither =/opt/custom/sbin= nor
+=/opt/custom/man=, so add them to root's shell startup.
 
 =gmake update= replaces the command or manual only when its MD5 differs.
 =gmake uninstall= removes both and keeps settings and backups.

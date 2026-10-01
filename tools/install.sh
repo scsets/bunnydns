@@ -6,8 +6,8 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30
 # Version: 0.1.0
-# Last-Updated: 2026-09-30
-# Update #: 1
+# Last-Updated: 2026-10-01
+# Update #: 2
 
 # The Makefile passes PYTHON, BINDIR, MANDIR, and DESTDIR in the environment.
 # The installed command is bunnydns.py with its #! line set to PYTHON, so it
@@ -112,6 +112,24 @@ install_files() {
   printf 'Installed %s (Python %s) and %s.\n' "$bi_installed_program" "$bi_python" "$bi_installed_manual"
 }
 
+# Warn when the shell or man will not find what was installed.  A staged
+# install (DESTDIR) is for another system, so it is not checked.  An unset
+# MANPATH is not checked either: man then derives its own search path.
+warn_search_paths() {
+  [ -z "$bi_destdir" ] || return 0
+  case ":${PATH:-}:" in
+    *":$bi_bindir:"*) ;;
+    *) printf 'Warning: %s is not on PATH, so the shell will not find %s; add it to PATH.\n' \
+      "$bi_bindir" "$bi_program" >&2 ;;
+  esac
+  bi_manroot=$(dirname "$bi_mandir")
+  case ":${MANPATH:-$bi_manroot}:" in
+    *":$bi_manroot:"*) ;;
+    *) printf 'Warning: %s is not on MANPATH, so man will not find %s(8); add it to MANPATH.\n' \
+      "$bi_manroot" "$bi_program" >&2 ;;
+  esac
+}
+
 uninstall_files() {
   rm -f "$bi_installed_program" "$bi_installed_manual" || exit 1
   printf '%s\n' 'Removed the command and manual; directories, settings, and backups were kept.'
@@ -158,8 +176,8 @@ verify_checksum() {
 
 case "${1:-}" in
   paths) show_paths ;;
-  install) resolve_paths && render_program && install_files ;;
-  update) resolve_paths && render_program && update_installation ;;
+  install) resolve_paths && render_program && install_files && warn_search_paths ;;
+  update) resolve_paths && render_program && update_installation && warn_search_paths ;;
   uninstall) resolve_paths && uninstall_files ;;
   checksum) write_checksum "${2:?checksum needs a sidecar path}" ;;
   checksum-check) verify_checksum "${2:?checksum-check needs a sidecar path}" ;;
