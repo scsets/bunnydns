@@ -6,11 +6,14 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30
 # Version: 0.1.0
-# Last-Updated: 2026-09-30
-# Update #: 1
+# Last-Updated: 2026-10-01
+# Update #: 2
 
 # bunnydns needs Python 3.9 or newer (3.14 by default) to run and GNU Make to
 # check and install it.  SmartOS also needs pkgsrc's CA bundle for HTTPS.
+# Only missing packages are installed; installed ones are never upgraded,
+# because an upgrade can carry unrelated packages along with it.  Upgrades
+# are the host's own routine.
 
 set -u
 LC_ALL=C
@@ -21,7 +24,7 @@ cd "$bd_script_dir/.." || exit 1
 
 bd_make=${BUNNYDNS_MAKE:-gmake}
 bd_python=${BUNNYDNS_PYTHON:-}
-bd_pkgin=${BUNNYDNS_PKGIN:-}
+bd_pkgsrc_prefix=${BUNNYDNS_PKGSRC_PREFIX:-}
 bd_pkgsrc_packages='python314 gmake mozilla-rootcerts-openssl'
 bd_brew_packages='python@3.14 make'
 bd_linux_packages='python3 make'
@@ -55,20 +58,14 @@ resolve_python() {
   return 1
 }
 
-pkgin_path() {
-  if [ "$(zonename)" = global ]; then
-    printf '%s\n' /opt/tools/bin/pkgin
+# pkgsrc lives in /opt/tools in the global zone and /opt/local in native zones.
+pkgsrc_prefix() {
+  if [ -n "$bd_pkgsrc_prefix" ]; then
+    printf '%s\n' "$bd_pkgsrc_prefix"
+  elif [ "$(zonename)" = global ]; then
+    printf '%s\n' /opt/tools
   else
-    printf '%s\n' /opt/local/bin/pkgin
-  fi
-}
-
-resolve_pkgin() {
-  if command_exists "$bd_pkgin"; then
-    command -v "$bd_pkgin"
-  else
-    bd_found=$(pkgin_path)
-    [ -x "$bd_found" ] && printf '%s\n' "$bd_found"
+    printf '%s\n' /opt/local
   fi
 }
 
@@ -91,6 +88,50 @@ linux_package_manager() {
   return 1
 }
 
+# Require the package manager; on Linux, also choose it as bd_manager.
+check_package_manager() {
+  case "$1" in
+    Darwin) command_exists brew || { printf '%s\n' 'Homebrew is required on macOS.' >&2; return 1; } ;;
+    SunOS) [ -x "$(pkgsrc_prefix)/bin/pkgin" ] || { printf 'pkgsrc is required at %s.\n' "$(pkgsrc_prefix)" >&2; return 1; } ;;
+    Linux) bd_manager=$(linux_package_manager) ;;
+    *) printf 'Unsupported operating system: %s\n' "$1" >&2; return 1 ;;
+  esac
+}
+
+required_packages() {
+  case "$1" in
+    Darwin) printf '%s\n' "$bd_brew_packages" ;;
+    SunOS) printf '%s\n' "$bd_pkgsrc_packages" ;;
+    Linux) printf '%s\n' "$bd_linux_packages" ;;
+  esac
+}
+
+# Succeed when package $2 is installed.  Only the package database is read.
+# shellcheck disable=SC2016
+package_installed() {
+  case "$1" in
+    Darwin) brew list --formula "$2" >/dev/null 2>&1 ;;
+    SunOS) "$(pkgsrc_prefix)/sbin/pkg_info" -q -e "$2" ;;
+    Linux)
+      case "$bd_manager" in
+        apt-get) [ "$(dpkg-query -W -f='${db:Status-Status}' "$2" 2>/dev/null)" = installed ] ;;
+        apk) apk info -e "$2" >/dev/null 2>&1 ;;
+        *) rpm -q --quiet "$2" ;;
+      esac
+      ;;
+  esac
+}
+
+# Print the required packages that are not installed, on one line.
+# shellcheck disable=SC2046
+missing_packages() {
+  bd_absent=
+  for bd_package in $(required_packages "$1"); do
+    package_installed "$1" "$bd_package" || bd_absent="$bd_absent $bd_package"
+  done
+  printf '%s\n' "${bd_absent# }"
+}
+
 print_tool_versions() {
   if bd_found=$(resolve_python); then
     printf '  Python:   %s (%s)\n' "$("$bd_found" --version 2>&1)" "$bd_found"
@@ -104,6 +145,7 @@ print_tool_versions() {
   done
   printf '  MD5 tool: %s\n' "$bd_md5_tool"
   if [ "$1" = SunOS ]; then
+    printf '  pkgsrc:   %s\n' "$(pkgsrc_prefix)"
     bd_bundle=missing
     for bd_candidate in /opt/tools/etc/openssl/certs/ca-certificates.crt \
       /opt/local/etc/openssl/certs/ca-certificates.crt; do
@@ -113,79 +155,57 @@ print_tool_versions() {
   fi
 }
 
-# Ask the package manager what it would change, without changing anything.
-# Package lists are split into words on purpose.
-# shellcheck disable=SC2086
-print_package_updates() {
-  printf '\nSystem-package update check (using the current package-manager catalog):\n'
-  case "$1" in
-    Darwin)
-      if ! command_exists brew; then
-        printf '%s\n' '  Homebrew is missing; install it before running gmake dependencies.'
-      elif HOMEBREW_NO_AUTO_UPDATE=1 brew outdated --verbose --formula $bd_brew_packages; then
-        printf '%s\n' '  No Homebrew formula updates were reported.'
-      else
-        printf '%s\n' '  Homebrew reported updates or could not complete the check.'
-      fi
-      ;;
-    SunOS)
-      if bd_found=$(resolve_pkgin); then
-        "$bd_found" -n install $bd_pkgsrc_packages || printf '%s\n' '  pkgin could not complete the update check.'
-      else
-        printf '  pkgin is missing at %s.\n' "$(pkgin_path)"
-      fi
-      ;;
-    Linux)
-      bd_manager=$(linux_package_manager) || return 0
-      case "$bd_manager" in
-        apt-get) apt-get --simulate install $bd_linux_packages ;;
-        apk) apk version $bd_linux_packages ;;
-        zypper) zypper --non-interactive list-updates ;;
-        *) "$bd_manager" check-update $bd_linux_packages ;;  # dnf and yum exit 100 when updates exist
-      esac || printf '  %s reported updates or could not complete the check.\n' "$bd_manager"
-      ;;
-    *) printf '  Unsupported operating system: %s\n' "$1" ;;
-  esac
+# Report which required packages are missing; set bd_missing.
+print_packages() {
+  bd_missing=
+  printf '\nRequired packages: %s\n' "$(required_packages "$1")"
+  check_package_manager "$1" || return 0
+  bd_missing=$(missing_packages "$1")
+  if [ -n "$bd_missing" ]; then
+    printf '  Missing: %s\n' "$bd_missing"
+  else
+    printf '%s\n' '  All installed.'
+  fi
 }
 
 status_dependencies() {
   bd_os_name=$(uname -s)
-  printf 'Toolchain status for %s (no packages will be installed or upgraded):\n' "$bd_os_name"
+  printf 'Toolchain status for %s (nothing will be installed):\n' "$bd_os_name"
   print_tool_versions "$bd_os_name"
-  print_package_updates "$bd_os_name"
-  printf '\n%s\n' 'Run gmake dependencies to install or upgrade the required tools.'
+  print_packages "$bd_os_name"
+  if [ -n "$bd_missing" ]; then
+    printf '\n%s\n' 'Run gmake dependencies to install the missing packages.'
+  fi
 }
 
 # shellcheck disable=SC2086
 install_dependencies() {
   bd_os_name=$(uname -s)
-  case "$bd_os_name" in
-    Darwin)
-      command_exists brew || { printf '%s\n' 'Homebrew is required on macOS.' >&2; return 1; }
-      brew update-if-needed || return
-      brew install $bd_brew_packages || return
-      brew upgrade --formula $bd_brew_packages || return
-      ;;
-    SunOS)
-      bd_found=$(resolve_pkgin) || { printf 'pkgin is required at %s.\n' "$(pkgin_path)" >&2; return 1; }
-      run_privileged "$bd_found" -y update || return
-      run_privileged "$bd_found" -y install $bd_pkgsrc_packages || return
-      ;;
-    Linux)
-      bd_manager=$(linux_package_manager) || return
-      case "$bd_manager" in
-        apt-get) run_privileged apt-get update && run_privileged apt-get install -y $bd_linux_packages ;;
-        apk) run_privileged apk update && run_privileged apk add --upgrade $bd_linux_packages ;;
-        zypper) run_privileged zypper --non-interactive refresh &&
-          run_privileged zypper --non-interactive install --no-confirm $bd_linux_packages ;;
-        *) run_privileged "$bd_manager" -y makecache && run_privileged "$bd_manager" -y install $bd_linux_packages ;;
-      esac || return
-      ;;
-    *)
-      printf 'Unsupported operating system: %s\n' "$bd_os_name" >&2
-      return 1
-      ;;
-  esac
+  check_package_manager "$bd_os_name" || return
+  bd_missing=$(missing_packages "$bd_os_name")
+  if [ -z "$bd_missing" ]; then
+    printf 'Nothing to install: %s are installed.\n' "$(required_packages "$bd_os_name")"
+  else
+    printf 'Installing %s.\n' "$bd_missing"
+    case "$bd_os_name" in
+      Darwin) brew install $bd_missing || return ;;
+      SunOS)
+        # Installing one package can make pkgin refresh or upgrade many
+        # others, so it runs without -y: it shows its plan and asks first.
+        run_privileged "$(pkgsrc_prefix)/bin/pkgin" -y update || return
+        run_privileged "$(pkgsrc_prefix)/bin/pkgin" install $bd_missing || return
+        ;;
+      Linux)
+        case "$bd_manager" in
+          apt-get) run_privileged apt-get update && run_privileged apt-get install -y $bd_missing ;;
+          apk) run_privileged apk update && run_privileged apk add $bd_missing ;;
+          zypper) run_privileged zypper --non-interactive refresh &&
+            run_privileged zypper --non-interactive install --no-confirm $bd_missing ;;
+          *) run_privileged "$bd_manager" -y makecache && run_privileged "$bd_manager" -y install $bd_missing ;;
+        esac || return
+        ;;
+    esac
+  fi
   python_is_supported "$(resolve_python)" || {
     printf '%s\n' 'Python 3.9 or newer was not found after installation.' >&2
     return 1

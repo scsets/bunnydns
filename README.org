@@ -7,7 +7,7 @@
 # Created: 2026-09-30
 # Version: 0.1.0
 # Last-Updated: 2026-10-01
-# Update #: 4
+# Update #: 5
 
 * Overview
 
@@ -167,7 +167,7 @@ Deleted and verified 1 record(s).
 * Installation
 
 #+begin_src sh
-gmake dependencies     # install or upgrade Python 3.14 and GNU Make
+gmake dependencies     # install Python 3.14 and GNU Make if missing
 gmake show-install-paths
 gmake install
 bunnydns init-key
@@ -189,11 +189,15 @@ destinations with absolute =BINDIR=, =MANDIR=, and =DESTDIR=.
 =gmake update= replaces the command or manual only when its MD5 differs.
 =gmake uninstall= removes both and keeps settings and backups.
 
-=gmake dependencies-status= reports tools and pending upgrades without
-installing anything.  =gmake dependencies= uses =pkgin= on SmartOS
-(=python314=, =gmake=, =mozilla-rootcerts-openssl=), Homebrew on macOS
-(=python@3.14=, =make=), and =apt-get=, =dnf=, =yum=, =apk=, or =zypper= on
-Linux.  On a fresh SmartOS zone, install =gmake= with =pkgin= first.
+=gmake dependencies-status= reports the tools and any missing packages
+without changing anything.  =gmake dependencies= installs only the missing
+packages and never upgrades installed ones, because an upgrade can carry
+unrelated packages along; upgrades are the host's own routine.  It uses
+=pkgin= on SmartOS (=python314=, =gmake=, =mozilla-rootcerts-openssl=),
+Homebrew on macOS (=python@3.14=, =make=), and =apt-get=, =dnf=, =yum=,
+=apk=, or =zypper= on Linux.  On SmartOS, =pkgin= shows everything it would
+change and asks before installing.  On a fresh SmartOS zone, install =gmake=
+with =pkgin= first.
 
 * Settings
 

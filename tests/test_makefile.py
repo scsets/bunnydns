@@ -4,8 +4,8 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
-# Last-Updated: 2026-09-30 Wed 00:00
-# Update #: 1
+# Last-Updated: 2026-10-01 Thu 00:00
+# Update #: 2
 
 """These tests stage installations under a temporary DESTDIR and put mock
 uname, zonename, and package managers first on PATH, so they never change
@@ -47,9 +47,13 @@ class MakefileTests(unittest.TestCase):
         self.mock_bin = self.root / "mock-bin"
         self.mock_bin.mkdir()
         links = {"uname": "mock_uname.sh", "zonename": "mock_zonename.sh"}
-        links.update({name: "mock_dependency_command.sh" for name in ("brew", "pkgin", "apt-get", "id")})
+        links.update({name: "mock_dependency_command.sh" for name in ("brew", "apt-get", "dpkg-query", "id")})
         for name, target in links.items():
             (self.mock_bin / name).symlink_to(TESTS_DIR / target)
+        self.pkgsrc = self.root / "pkgsrc"
+        for path in ("bin/pkgin", "sbin/pkg_info"):
+            (self.pkgsrc / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.pkgsrc / path).symlink_to(TESTS_DIR / "mock_dependency_command.sh")
         # Start each make afresh, not as a child of the make running the tests.
         ignored = ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES", "PYTHON", "XDG_DATA_HOME")
         self.environment = {name: value for name, value in os.environ.items() if name not in ignored}
@@ -104,29 +108,47 @@ class MakefileTests(unittest.TestCase):
                 self.assert_result(self.staged("install", PYTHON=python), 2, "Python 3.9 or newer is required")
         self.assertFalse(self.stage.exists())
 
+    def assert_only_queries(self):
+        """Require every logged package-manager call to be a read-only query."""
+        for line in self.logged().splitlines():
+            self.assertTrue(line.startswith(("brew list --formula ", "pkg_info -q -e ", "dpkg-query -W ")), line)
+
     def test_dependency_status_changes_nothing(self):
         self.assert_result(self.make("dependencies-status", platform="Darwin"), 0,
-                           "Toolchain status for Darwin", "Python:   Python 3.")
-        self.assertEqual(self.logged(), "brew outdated --verbose --formula python@3.14 make\n")
-        self.assert_result(self.make("dependencies-status", platform="SunOS", zone="global"), 0, "/opt/tools/bin/pkgin")
-        self.assert_result(self.make("dependencies-status", platform="SunOS", zone="web01"), 0, "/opt/local/bin/pkgin")
+                           "Toolchain status for Darwin", "Python:   Python 3.", "All installed.")
+        self.assertEqual(self.logged(), "brew list --formula python@3.14\nbrew list --formula make\n")
+        for zone, prefix in (("global", "/opt/tools"), ("web01", "/opt/local")):
+            with self.subTest(zone=zone):
+                self.assert_result(self.make("dependencies-status", platform="SunOS", zone=zone), 0, f"pkgsrc:   {prefix}\n")
+        self.log.write_text("")
+        result = self.make("dependencies-status", platform="SunOS", BUNNYDNS_PKGSRC_PREFIX=str(self.pkgsrc),
+                           MOCK_MISSING="gmake")
+        self.assert_result(result, 0, "Missing: gmake\n", "Run gmake dependencies")
+        self.assert_only_queries()
 
     def test_dependency_installation(self):
+        # The first package is missing; the others are installed and never upgraded.
+        pkgsrc = {"BUNNYDNS_PKGSRC_PREFIX": str(self.pkgsrc)}
         cases = [
-            ("Darwin", {}, ["brew update-if-needed", "brew install python@3.14 make", "brew upgrade --formula python@3.14 make"]),
-            ("SunOS", {"BUNNYDNS_PKGIN": str(self.mock_bin / "pkgin")},
-             ["pkgin -y update", "pkgin -y install python314 gmake mozilla-rootcerts-openssl"]),
-            ("Linux", {}, ["apt-get update", "apt-get install -y python3 make"]),
+            ("Darwin", {}, "python@3.14", ["brew install python@3.14"]),
+            ("SunOS", pkgsrc, "python314", ["pkgin -y update", "pkgin install python314"]),
+            ("Linux", {}, "python3", ["apt-get update", "apt-get install -y python3"]),
         ]
-        for platform, environment, commands in cases:
+        for platform, environment, missing, commands in cases:
             with self.subTest(platform):
                 self.log.write_text("")
-                self.assert_result(self.make("dependencies", platform=platform, **environment), 0, "Toolchain status")
+                result = self.make("dependencies", platform=platform, MOCK_MISSING=missing, **environment)
+                self.assert_result(result, 0, f"Installing {missing}.", "Toolchain status")
                 for command in commands:
                     self.assertIn(command + "\n", self.logged())
 
+            with self.subTest(platform, missing=None):
+                self.log.write_text("")
+                self.assert_result(self.make("dependencies", platform=platform, **environment), 0, "Nothing to install")
+                self.assert_only_queries()
+
         self.log.write_text("")
-        result = self.make("dependencies", platform="Linux", MOCK_DEPENDENCY_FAIL="apt-get update")
+        result = self.make("dependencies", platform="Linux", MOCK_MISSING="make", MOCK_DEPENDENCY_FAIL="apt-get update")
         self.assert_result(result, 2)
         self.assertNotIn("apt-get install", self.logged())
 

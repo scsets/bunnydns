@@ -4,8 +4,8 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30
 # Version: 0.1.0
-# Last-Updated: 2026-09-30
-# Update #: 1
+# Last-Updated: 2026-10-01
+# Update #: 2
 
 SHELL = /bin/sh
 
@@ -47,10 +47,10 @@ require-python: require-gnu-make ## Require Python 3.9 or newer at an absolute p
 	printf '%s\n' 'Python 3.9 or newer is required; run gmake dependencies or set PYTHON=/absolute/path/to/python3.' >&2; \
 	exit 1
 
-dependencies-status: require-gnu-make ## Report installed tools and available package upgrades.
+dependencies-status: require-gnu-make ## Report installed tools and missing packages.
 	@BUNNYDNS_MAKE='$(MAKE)' BUNNYDNS_PYTHON='$(PYTHON)' tools/dependencies.sh status
 
-dependencies: require-gnu-make ## Install or upgrade Python 3.14 and GNU Make (and CA certificates on SmartOS).
+dependencies: require-gnu-make ## Install Python 3.14 and GNU Make (and CA certificates on SmartOS) if missing.
 	@BUNNYDNS_MAKE='$(MAKE)' tools/dependencies.sh install
 
 checksum: require-gnu-make ## Record the program's MD5 after reviewing changes.
