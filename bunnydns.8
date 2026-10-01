@@ -4,9 +4,9 @@
 .\" Copyright (C) 2026, SCS, all rights reserved.
 .\" Created: 2026-09-30 Wed 00:00
 .\" Version: 0.1.0
-.\" Last-Updated: 2026-09-30 Wed 00:00
-.\" Update #: 3
-.TH BUNNYDNS 8 "2026-09-30" "bunnydns 0.1.0" "System Administration Commands"
+.\" Last-Updated: 2026-10-01 Thu 00:00
+.\" Update #: 4
+.TH BUNNYDNS 8 "2026-10-01" "bunnydns 0.1.0" "System Administration Commands"
 .SH NAME
 bunnydns \- inspect, edit, and reconcile Bunny DNS records
 .SH SYNOPSIS
@@ -196,9 +196,10 @@ The snapshot directory.  Default:
 in the state directory.
 .PP
 On SmartOS both are
-.I /var/bunnydns
-in every zone, as with SmartOS's own tools: the settings file, the API key,
-and the backups live together there.
+.I /var/opt/scs/bunnydns
+in every zone: the settings file, the API key, and the backups live together
+there, apart from the installed program in
+.IR /opt/scs .
 Elsewhere they are
 .I $XDG_CONFIG_HOME/bunnydns
 and
@@ -243,13 +244,13 @@ bunnydns apply < records.json
 .fi
 .SH FILES
 .TP
-.I /var/bunnydns/bunnydns.conf
+.I /var/opt/scs/bunnydns/bunnydns.conf
 Settings on SmartOS.
 .TP
-.I /var/bunnydns/api\-key
+.I /var/opt/scs/bunnydns/api\-key
 Default API key file on SmartOS.
 .TP
-.I /var/bunnydns/backups
+.I /var/opt/scs/bunnydns/backups
 Default snapshot directory on SmartOS.
 .SH SEE ALSO
 .BR python3 (1)

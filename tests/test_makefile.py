@@ -5,7 +5,7 @@
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
 # Last-Updated: 2026-10-01 Thu 00:00
-# Update #: 3
+# Update #: 4
 
 """These tests stage installations under a temporary DESTDIR and put mock
 uname, zonename, and package managers first on PATH, so they never change
@@ -24,7 +24,7 @@ from support import PROJECT_DIR
 
 TESTS_DIR = PROJECT_DIR / "tests"
 MAKE = os.environ.get("BUNNYDNS_TEST_MAKE") or shutil.which("gmake") or shutil.which("make")
-STAGED = {"BINDIR": "/opt/custom/sbin", "MANDIR": "/opt/custom/man/man8"}
+STAGED = {"BINDIR": "/opt/scs/sbin", "MANDIR": "/opt/scs/man/man8"}
 Result = namedtuple("Result", "status output")
 
 
@@ -84,8 +84,8 @@ class MakefileTests(unittest.TestCase):
 
     def test_default_install_paths(self):
         cases = [
-            ("SunOS", "global", {}, "/opt/custom/sbin/bunnydns", "/opt/custom/man/man8/bunnydns.8"),
-            ("SunOS", "web01", {}, "/opt/local/sbin/bunnydns", "/opt/local/man/man8/bunnydns.8"),
+            ("SunOS", "global", {}, "/opt/scs/sbin/bunnydns", "/opt/scs/man/man8/bunnydns.8"),
+            ("SunOS", "web01", {}, "/opt/scs/sbin/bunnydns", "/opt/scs/man/man8/bunnydns.8"),
             ("Darwin", None, {}, f"{self.home}/.local/bin/bunnydns", f"{self.home}/.local/share/man/man8/bunnydns.8"),
             ("Darwin", None, {"XDG_DATA_HOME": "/data"}, f"{self.home}/.local/bin/bunnydns", "/data/man/man8/bunnydns.8"),
             ("Linux", None, {}, "/usr/local/sbin/bunnydns", "/usr/local/share/man/man8/bunnydns.8"),
@@ -152,6 +152,21 @@ class MakefileTests(unittest.TestCase):
         self.assert_result(result, 2)
         self.assertNotIn("apt-get install", self.logged())
 
+    def test_smartos_install_creates_the_private_directory(self):
+        private = self.stage / "var/opt/scs/bunnydns"
+        install = ("install", f"DESTDIR={self.stage}")
+        self.assert_result(self.make(*install, platform="SunOS"), 0, f"Created {private} (mode 0700)")
+        self.assertTrue((self.stage / "opt/scs/sbin/bunnydns").is_file())
+        self.assertEqual(stat.S_IMODE(private.stat().st_mode), 0o700)
+        settings = private / "bunnydns.conf"
+        settings.write_text("backup_dir=/var/opt/scs/bunnydns/backups\n")
+        result = self.make(*install, platform="SunOS")
+        self.assert_result(result, 0)
+        self.assertNotIn("Created", result.output)
+        self.assertEqual(settings.read_text(), "backup_dir=/var/opt/scs/bunnydns/backups\n")
+        self.assert_result(self.make("uninstall", f"DESTDIR={self.stage}", platform="SunOS"), 0)
+        self.assertTrue(settings.is_file())  # host data outlives the program
+
     def test_install_warns_about_search_paths(self):
         bindir, manroot = self.root / "bin", self.root / "man"
         targets = (f"BINDIR={bindir}", f"MANDIR={manroot / 'man8'}", "DESTDIR=")
@@ -176,8 +191,8 @@ class MakefileTests(unittest.TestCase):
         self.assert_result(self.make("checksum-check", f"CHECKSUM={sidecar}"), 2, "Checksum mismatch for bunnydns.py")
 
     def test_staged_install_update_and_uninstall(self):
-        program = self.stage / "opt/custom/sbin/bunnydns"
-        manual = self.stage / "opt/custom/man/man8/bunnydns.8"
+        program = self.stage / "opt/scs/sbin/bunnydns"
+        manual = self.stage / "opt/scs/man/man8/bunnydns.8"
         source = (PROJECT_DIR / "bunnydns.py").read_text()
         rendered = f"#!{self.python}\n" + source.split("\n", 1)[1]
         manual_source = (PROJECT_DIR / "bunnydns.8").read_bytes()

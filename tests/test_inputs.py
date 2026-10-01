@@ -4,8 +4,8 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
-# Last-Updated: 2026-09-30 Wed 00:00
-# Update #: 3
+# Last-Updated: 2026-10-01 Thu 00:00
+# Update #: 4
 
 import os
 import platform
@@ -73,8 +73,9 @@ class RecordsTests(unittest.TestCase):
 
 
 class SiteTests(unittest.TestCase):
-    def test_smartos_keeps_everything_in_var(self):
-        self.assertEqual(bunnydns.site_dirs("SunOS", {"XDG_CONFIG_HOME": "/cfg"}), ("/var/bunnydns", "/var/bunnydns"))
+    def test_smartos_keeps_host_data_in_var_opt(self):
+        self.assertEqual(bunnydns.site_dirs("SunOS", {"XDG_CONFIG_HOME": "/cfg"}),
+                         ("/var/opt/scs/bunnydns", "/var/opt/scs/bunnydns"))
 
     def test_other_systems_follow_xdg(self):
         self.assertEqual(bunnydns.site_dirs("Darwin", {"HOME": "/Users/u"}),

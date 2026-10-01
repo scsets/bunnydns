@@ -7,17 +7,19 @@
 # Created: 2026-09-30
 # Version: 0.1.0
 # Last-Updated: 2026-10-01
-# Update #: 2
+# Update #: 3
 
 # The Makefile passes PYTHON, BINDIR, MANDIR, and DESTDIR in the environment.
 # The installed command is bunnydns.py with its #! line set to PYTHON, so it
 # runs the same interpreter under cron or in a SmartOS zone with another PATH.
 #
 # Default locations:
-#   SmartOS global zone  /opt/custom/sbin, /opt/custom/man/man8
-#   SmartOS native zone  /opt/local/sbin, /opt/local/man/man8
-#   macOS (XDG)          ~/.local/bin, ${XDG_DATA_HOME:-~/.local/share}/man/man8
-#   Linux                /usr/local/sbin, /usr/local/share/man/man8
+#   SmartOS (every zone)  /opt/scs/sbin, /opt/scs/man/man8
+#   macOS (XDG)           ~/.local/bin, ${XDG_DATA_HOME:-~/.local/share}/man/man8
+#   Linux                 /usr/local/sbin, /usr/local/share/man/man8
+#
+# On SmartOS, install also creates /var/opt/scs/bunnydns (mode 0700) for the
+# host's settings, API key, and backups, and never changes what is inside.
 
 set -u
 LC_ALL=C
@@ -33,6 +35,7 @@ bi_python=${PYTHON:-}
 bi_bindir=${BINDIR:-}
 bi_mandir=${MANDIR:-}
 bi_destdir=${DESTDIR:-}
+bi_statedir=
 bi_work_dir=
 
 die() {
@@ -63,10 +66,9 @@ resolve_paths() {
   bi_os_name=$(uname -s)
   case "$bi_os_name" in
     SunOS)
-      command -v zonename >/dev/null 2>&1 || die 'zonename is required on SmartOS.'
-      if [ "$(zonename)" = global ]; then bi_prefix=/opt/custom; else bi_prefix=/opt/local; fi
-      bi_default_bindir=$bi_prefix/sbin
-      bi_default_mandir=$bi_prefix/man/man8
+      bi_default_bindir=/opt/scs/sbin
+      bi_default_mandir=/opt/scs/man/man8
+      bi_statedir=/var/opt/scs/$bi_program
       ;;
     Darwin)
       bi_default_bindir=${HOME:?HOME is not set}/.local/bin
@@ -110,6 +112,14 @@ install_files() {
   cp "$bi_manpage" "$bi_installed_manual" || exit 1
   chmod 644 "$bi_installed_manual" || exit 1
   printf 'Installed %s (Python %s) and %s.\n' "$bi_installed_program" "$bi_python" "$bi_installed_manual"
+}
+
+# Create the host's private directory, leaving an existing one untouched.
+create_statedir() {
+  [ -n "$bi_statedir" ] && [ ! -d "$bi_destdir$bi_statedir" ] || return 0
+  mkdir -p "$(dirname "$bi_destdir$bi_statedir")" || exit 1
+  mkdir -m 700 "$bi_destdir$bi_statedir" || exit 1
+  printf 'Created %s (mode 0700) for settings, the API key, and backups.\n' "$bi_destdir$bi_statedir"
 }
 
 # Warn when the shell or man will not find what was installed.  A staged
@@ -176,8 +186,8 @@ verify_checksum() {
 
 case "${1:-}" in
   paths) show_paths ;;
-  install) resolve_paths && render_program && install_files && warn_search_paths ;;
-  update) resolve_paths && render_program && update_installation && warn_search_paths ;;
+  install) resolve_paths && render_program && install_files && create_statedir && warn_search_paths ;;
+  update) resolve_paths && render_program && update_installation && create_statedir && warn_search_paths ;;
   uninstall) resolve_paths && uninstall_files ;;
   checksum) write_checksum "${2:?checksum needs a sidecar path}" ;;
   checksum-check) verify_checksum "${2:?checksum-check needs a sidecar path}" ;;

@@ -7,7 +7,7 @@
 # Created: 2026-09-30
 # Version: 0.1.0
 # Last-Updated: 2026-10-01
-# Update #: 6
+# Update #: 7
 
 * Overview
 
@@ -72,7 +72,8 @@ bunnydns init-key
 
 Inspect and edit records by hand.  =update= and =delete= take the ID that
 =list= shows, and every change first saves a snapshot of the zone (on
-SmartOS in =/var/bunnydns/backups=; Settings below covers other systems):
+SmartOS in =/var/opt/scs/bunnydns/backups=; Settings below covers other
+systems):
 
 #+begin_example
 $ bunnydns list example.com
@@ -82,11 +83,11 @@ ID     TYPE  NAME     TTL   DISABLED  VALUE
 12346  A     www      60    false     192.0.2.10
 
 $ bunnydns add example.com MX @ mail.example.com priority=10
-Backup: /var/bunnydns/backups/example.com-20261001T060146Z-s4ljfjad.json
+Backup: /var/opt/scs/bunnydns/backups/example.com-20261001T060146Z-s4ljfjad.json
 Added record 12347 to example.com: MX @ mail.example.com
 
 $ bunnydns update example.com 12345 ttl=300 disabled=true
-Backup: /var/bunnydns/backups/example.com-20261001T060146Z-tk631l3r.json
+Backup: /var/opt/scs/bunnydns/backups/example.com-20261001T060146Z-tk631l3r.json
 Updated record 12345 in example.com: A staging 192.0.2.20
 
 $ bunnydns list -o id,type,name,priority,value example.com
@@ -127,7 +128,7 @@ $ bunnydns apply < records.json
 UPDATE web-origin: A www 192.0.2.10 -- adopt the identical unmanaged record
 UPDATE mail: MX @ mail.example.com -- adopt the identical unmanaged record
 CREATE api: A api 192.0.2.11 -- no such record
-Backup: /var/bunnydns/backups/example.com-20261001T060146Z-gyb7n0nr.json
+Backup: /var/opt/scs/bunnydns/backups/example.com-20261001T060146Z-gyb7n0nr.json
 OK web-origin: A www 192.0.2.10 -- matches
 OK mail: MX @ mail.example.com -- matches
 OK api: A api 192.0.2.11 -- matches
@@ -153,7 +154,7 @@ DELETE api: A api 192.0.2.11 -- no longer declared
 
 $ bunnydns prune -f records.json
 DELETE api: A api 192.0.2.11 -- no longer declared
-Backup: /var/bunnydns/backups/example.com-20261001T060146Z-6bs68kx8.json
+Backup: /var/opt/scs/bunnydns/backups/example.com-20261001T060146Z-6bs68kx8.json
 Deleted and verified 1 record(s).
 #+end_example
 
@@ -166,6 +167,9 @@ Deleted and verified 1 record(s).
 
 * Installation
 
+On SmartOS, keep the checkout in =/opt/scs/src/bunnydns= and run these as
+root:
+
 #+begin_src sh
 gmake dependencies     # install Python 3.14 and GNU Make if missing
 gmake show-install-paths
@@ -173,12 +177,11 @@ gmake install
 bunnydns init-key
 #+end_src
 
-| System              | Command                     | Manual                                 |
-|---------------------+-----------------------------+----------------------------------------|
-| SmartOS global zone | =/opt/custom/sbin/bunnydns= | =/opt/custom/man/man8/bunnydns.8=      |
-| SmartOS native zone | =/opt/local/sbin/bunnydns=  | =/opt/local/man/man8/bunnydns.8=       |
-| macOS               | =~/.local/bin/bunnydns=     | =$XDG_DATA_HOME/man/man8/bunnydns.8=   |
-| Linux               | =/usr/local/sbin/bunnydns=  | =/usr/local/share/man/man8/bunnydns.8= |
+| System             | Command                    | Manual                                 |
+|--------------------+----------------------------+----------------------------------------|
+| SmartOS (any zone) | =/opt/scs/sbin/bunnydns=   | =/opt/scs/man/man8/bunnydns.8=         |
+| macOS              | =~/.local/bin/bunnydns=    | =$XDG_DATA_HOME/man/man8/bunnydns.8=   |
+| Linux              | =/usr/local/sbin/bunnydns= | =/usr/local/share/man/man8/bunnydns.8= |
 
 The installed command is =bunnydns.py= with its =#!= line set to the Python
 found at install time (=python3.14=, else a =python3= that is 3.9 or newer;
@@ -188,8 +191,8 @@ destinations with absolute =BINDIR=, =MANDIR=, and =DESTDIR=.
 
 =gmake install= and =gmake update= warn when the command's directory is not
 on =PATH=, or the manual's is not on a set =MANPATH=.  The stock root profile
-in the SmartOS global zone has neither =/opt/custom/sbin= nor
-=/opt/custom/man=, so add them to root's shell startup.
+in the SmartOS global zone has neither =/opt/scs/sbin= nor =/opt/scs/man=,
+so add them to root's shell startup.
 
 =gmake update= replaces the command or manual only when its MD5 differs.
 =gmake uninstall= removes both and keeps settings and backups.
@@ -208,16 +211,22 @@ with =pkgin= first.
 
 | System          | Settings                                  | API key                             | Backups                            |
 |-----------------+-------------------------------------------+-------------------------------------+------------------------------------|
-| SmartOS         | =/var/bunnydns/bunnydns.conf=             | =/var/bunnydns/api-key=             | =/var/bunnydns/backups=            |
+| SmartOS         | =/var/opt/scs/bunnydns/bunnydns.conf=     | =/var/opt/scs/bunnydns/api-key=     | =/var/opt/scs/bunnydns/backups=    |
 | Elsewhere (XDG) | =$XDG_CONFIG_HOME/bunnydns/bunnydns.conf= | =$XDG_CONFIG_HOME/bunnydns/api-key= | =$XDG_STATE_HOME/bunnydns/backups= |
+
+On SmartOS, the program lives in =/opt/scs= and everything the host owns in
+=/var/opt/scs/bunnydns=, following illumos's split between =/opt= and
+=/var/opt=; =/etc= does not survive a reboot in the global zone.  =gmake
+install= creates that directory with mode 0700 and never changes what is in
+it.
 
 The settings file is optional.  It holds =name=value= lines and =#=
 comments; =key_file= defaults to =api-key= beside it and =backup_dir= to the
 state directory's =backups=.  =bunnydns help= shows the paths in use.
 
 #+begin_example
-key_file=/var/bunnydns/api-key
-backup_dir=/var/bunnydns/backups
+key_file=/var/opt/scs/bunnydns/api-key
+backup_dir=/var/opt/scs/bunnydns/backups
 #+end_example
 
 * Records file

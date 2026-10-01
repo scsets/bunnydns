@@ -6,8 +6,8 @@
 # Copyright (C) 2026, SCS, all rights reserved.
 # Created: 2026-09-30 Wed 00:00
 # Version: 0.1.0
-# Last-Updated: 2026-09-30 Wed 00:00
-# Update #: 3
+# Last-Updated: 2026-10-01 Thu 00:00
+# Update #: 4
 
 """Inspect, edit, and reconcile records in a Bunny DNS zone.
 
@@ -182,17 +182,17 @@ def ownership_comment(owner: str, key: str) -> str:
 
 # --- Settings ---------------------------------------------------------------
 #
-# On SmartOS, everything bunnydns keeps lives in /var/bunnydns in every zone:
-# the settings file, the API key, and the backups, just as imgadm keeps
-# /var/imgadm/imgadm.conf beside its state.  Other systems follow the XDG base
-# directories.  The settings file, bunnydns.conf, is optional; it holds
-# name=value lines and # comments.
+# On SmartOS, everything bunnydns keeps lives in /var/opt/scs/bunnydns in every
+# zone: the settings file, the API key, and the backups.  /opt/scs holds only
+# what gmake install can rebuild, and /etc does not survive a reboot in the
+# global zone.  Other systems follow the XDG base directories.  The settings
+# file, bunnydns.conf, is optional; it holds name=value lines and # comments.
 
 
 def site_dirs(system: str, environ: Mapping[str, str]) -> tuple:
     """Return (settings directory, state directory) for this system."""
     if system == "SunOS":
-        return f"/var/{PROGRAM}", f"/var/{PROGRAM}"
+        return f"/var/opt/scs/{PROGRAM}", f"/var/opt/scs/{PROGRAM}"
     home = environ.get("HOME") or os.path.expanduser("~")
 
     def xdg(variable: str, fallback: str) -> str:
